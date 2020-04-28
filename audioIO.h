@@ -10,7 +10,7 @@
 #include <pa_win_wasapi.h>
 #endif
 
-bool aioConnectAudio(struct audioBuffer *outputBuffer, PaStream **paInputStream, PaStream **paOutputStream) {
+bool aioConnectAudio(PaStream **paInputStream, PaStream **paOutputStream) {
 	PaError err;
 
 
@@ -115,7 +115,7 @@ bool aioConnectAudio(struct audioBuffer *outputBuffer, PaStream **paInputStream,
 
 	err = Pa_OpenStream( paInputStream,
 			&inputParameters, NULL,
-			SAMPLE_RATE, BLOCK_SIZE, paNoFlag,
+			SAMPLE_RATE, MONO_BLOCK_SIZE, paNoFlag,
 			NULL, NULL);
 
 	if (err != paNoError) {
@@ -132,7 +132,7 @@ bool aioConnectAudio(struct audioBuffer *outputBuffer, PaStream **paInputStream,
 
 	err = Pa_OpenStream( paOutputStream,
 			NULL, &outputParameters,
-			SAMPLE_RATE, BLOCK_SIZE, paNoFlag,
+			SAMPLE_RATE, MONO_BLOCK_SIZE, paNoFlag,
 			NULL, NULL);
 
 	if (err != paNoError) {
@@ -141,7 +141,6 @@ bool aioConnectAudio(struct audioBuffer *outputBuffer, PaStream **paInputStream,
 	}
 
 
-	bufferClear(outputBuffer, 0);
 	Pa_StartStream(*paOutputStream);
 	Pa_StartStream(*paInputStream);
 
@@ -164,8 +163,8 @@ bool aioConnectAudio(struct audioBuffer *outputBuffer, PaStream **paInputStream,
 
 // --- measuring latency ---
 
-#define WAIT_SAMPLES  (30 * BLOCK_SIZE)
-#define BEEP_SAMPLES  (30 * BLOCK_SIZE)
+#define WAIT_SAMPLES  (30 * MONO_BLOCK_SIZE)
+#define BEEP_SAMPLES  (30 * MONO_BLOCK_SIZE)
 
 uint64_t aioLatSqSums[BEEP_SAMPLES];
 uint64_t aioLatSqSum = 0;
@@ -175,7 +174,7 @@ uint64_t aioLatMaxDiffPos = 0;
 int64_t  aioLatBufferLatBlocksSum = 0;
 
 void aioLatBlock(sample_t *block, int bufferLatBlocks) {
-	for (size_t i = 0; i < BLOCK_SIZE; i++) {
+	for (size_t i = 0; i < MONO_BLOCK_SIZE; i++) {
 		aioLatSqSum += block[i] * block[i];
 		if (aioLatPos > BEEP_SAMPLES) {
 			uint64_t diff = aioLatSqSum - aioLatSqSums[aioLatPos % BEEP_SAMPLES];
@@ -202,7 +201,7 @@ double aioLatReset() {
 	if (aioLatPos > BEEP_SAMPLES + WAIT_SAMPLES) {
 		ret = ((double)aioLatMaxDiffPos - WAIT_SAMPLES) / SAMPLE_RATE * 1000;
 
-		double bufferLat = (double)aioLatBufferLatBlocksSum / (aioLatPos / BLOCK_SIZE) * BLOCK_SIZE / SAMPLE_RATE * 1000;
+		double bufferLat = (double)aioLatBufferLatBlocksSum / (aioLatPos / MONO_BLOCK_SIZE) * MONO_BLOCK_SIZE / SAMPLE_RATE * 1000;
 		ret -= bufferLat;
 
 		double signalToNoise =

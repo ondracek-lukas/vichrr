@@ -8,17 +8,18 @@
 #include <float.h>
 
 #include "main.h"
+#include "stereoBuffer.h"
 #include "net.h"
 #include "tty.h"
-#include "audioBuffer.h"
 #include "audioIO.h"
 
-struct audioBuffer outputBuffer;
+struct stereoBuffer outputBuffer;
 PaStream *paInputStream = NULL, *paOutputStream = NULL;
 int udpSocket = -1;
 pthread_t inputThread, outputThread, udpThread;
 uint8_t clientID;
 float aioLat = 0;
+float dBAdj = 20;
 
 volatile enum inputMode {
 	INPUT_DISCARD,
@@ -42,19 +43,24 @@ volatile enum udpState {
 static void *outputWorker(void *none) {
 	while (outputMode != OUTPUT_END) {
 		__sync_synchronize();
-		sample_t *blockMono = bufferReadNext(&outputBuffer);
-		sample_t blockStereo[BLOCK_SIZE * 2];
-		for (size_t i = 0; i < BLOCK_SIZE; i++) {
-			blockStereo[2 * i] = blockStereo[2 * i + 1] = blockMono[i];
-		}
-		PaError err = Pa_WriteStream(paOutputStream, blockStereo, BLOCK_SIZE);
+		sample_t *blockStereo = sbufferReadNext(&outputBuffer);
+		PaError err = Pa_WriteStream(paOutputStream, blockStereo, MONO_BLOCK_SIZE);
 		if ((outputMode == OUTPUT_PASS_STAT) && (outputBuffer.readPos % 50 == 0)) {
 			float dBAvg, dBPeak;
-			bufferOutputStats(&outputBuffer, &dBAvg, &dBPeak);
-			char str[100];
+			sbufferOutputStats(&outputBuffer, &dBAvg, &dBPeak);
+			if (dBAvg + dBAdj > -20) {
+				dBAdj = -20 - dBAvg;
+			}
+
+			char str[200];
 			char *s = str;
-			for (int i=0; i < 21; i++) *s++ = ' ';
+
+			s += sprintf(s, "%-20s ", "system level:");
 			ttyFormatSndLevel(&s, dBAvg, dBPeak);
+			*s++ = '\n';
+			s += sprintf(s, "%-20s ", "adjusted level:");
+			ttyFormatSndLevel(&s, dBAvg + dBAdj, dBPeak + dBAdj);
+
 			ttyResetStatus();
 			ttyUpdateStatus(str, 0);
 			ttyPrintStatus();
@@ -68,11 +74,11 @@ static void *inputWorker(void *none) {
 	struct packetClientData packet;
 	packet.type = PACKET_DATA;
 	sample_t *blockMono = packet.block;
-	sample_t blockStereo[BLOCK_SIZE * 2];
+	sample_t blockStereo[STEREO_BLOCK_SIZE * 2];
 
 	while (inputMode != INPUT_END) {
-		PaError err = Pa_ReadStream(paInputStream, blockStereo, BLOCK_SIZE);
-		for (size_t i = 0; i < BLOCK_SIZE; i++) {
+		PaError err = Pa_ReadStream(paInputStream, blockStereo, MONO_BLOCK_SIZE);
+		for (size_t i = 0; i < MONO_BLOCK_SIZE; i++) {
 			blockMono[i] = blockStereo[2 * i];
 		}
 		if (inputMode != lastMode) {
@@ -80,16 +86,16 @@ static void *inputWorker(void *none) {
 			blockIndex = 0;
 			switch (inputMode) {
 				case INPUT_TO_OUTPUT:
-					bufferClear(&outputBuffer, 0);
+					sbufferClear(&outputBuffer, 0);
 					/*
 					memset(blockMono, 0, sizeof(blockMono)); // XXX
 					for (int i = 0; i < 30; i++) {
-						bufferWrite(&outputBuffer, blockIndex++, blockMono);
+						sbufferWrite(&outputBuffer, blockIndex++, blockMono);
 					}
 					*/
 					break;
 				case INPUT_MEASURE_LATENCY:
-					bufferClear(&outputBuffer, 0);
+					sbufferClear(&outputBuffer, 0);
 					aioLatReset();
 					break;
 				case INPUT_SEND:
@@ -105,11 +111,14 @@ static void *inputWorker(void *none) {
 				send(udpSocket, (void *)&packet, sizeof(packet), 0);
 				break;
 			case INPUT_TO_OUTPUT:
-				bufferWrite(&outputBuffer, blockIndex++, blockMono);
+				sbufferWrite(&outputBuffer, blockIndex++, blockStereo);
 				break;
 			case INPUT_MEASURE_LATENCY:
 				aioLatBlock(blockMono, blockIndex - outputBuffer.readPos);
-				bufferWrite(&outputBuffer, blockIndex++, blockMono);
+				for (size_t i = 0; i < MONO_BLOCK_SIZE; i++) {
+					blockStereo[2 * i] = blockStereo[2 * i + 1] = blockMono[i];
+				}
+				sbufferWrite(&outputBuffer, blockIndex++, blockStereo);
 				break;
 			case INPUT_DISCARD:
 			case INPUT_END:
@@ -118,7 +127,7 @@ static void *inputWorker(void *none) {
 		__sync_synchronize();
 		/*
 		if (blockIndex % 1000 == 999) {
-			bufferPrintStats(&outputBuffer);
+			sbufferPrintStats(&outputBuffer);
 		}
 		*/
 	}
@@ -138,7 +147,7 @@ static void *udpReceiver(void *none) {
 			case PACKET_HELO:
 				if (size != sizeof(struct packetServerHelo)) break;
 				clientID = packet->sHelo.clientID;
-				bufferClear(&outputBuffer, packet->sHelo.initBlockIndex);
+				sbufferClear(&outputBuffer, packet->sHelo.initBlockIndex);
 				printf("Connected.\n");
 				fflush(stdout);
 				__sync_synchronize();
@@ -146,7 +155,7 @@ static void *udpReceiver(void *none) {
 				break;
 			case PACKET_DATA:
 				if ((inputMode != INPUT_SEND) || (size != sizeof(struct packetServerData))) break;
-				bufferWrite(&outputBuffer, packet->sData.blockIndex, packet->sData.block);
+				sbufferWrite(&outputBuffer, packet->sData.blockIndex, packet->sData.block);
 				break;
 			case PACKET_STATUS:
 				packetRaw[size] = '\0';
@@ -213,7 +222,8 @@ int main() {
 			"You may need to allow exclusive mode in your system settings\n"
 			"and set sampling rate of both microphone and headphones to " STR(SAMPLE_RATE) " Hz.\n\n");
 #endif
-	aioConnectAudio(&outputBuffer, &paInputStream, &paOutputStream);
+	sbufferClear(&outputBuffer, 0);
+	aioConnectAudio(&paInputStream, &paOutputStream);
 
 	pthread_create(&inputThread, NULL, &inputWorker, NULL);
 	pthread_create(&outputThread, NULL, &outputWorker, NULL);
@@ -280,25 +290,42 @@ int main() {
 	printf(
 			"\n"
 			"You may hear the sound being recorded by your microphone\n"
-			"and see its average (#) and peak (+) intensity levels on the scale below.\n"
+			"and see its average (#) and peak (+) intensity levels on the scales below.\n"
 			"Set your microphone volume in system settings so that\n"
-			"it's peak intensity never exceeds -30 dB; --------------------------------+\n"
+			"it's peak intensity never exceeds -10 dB on the first scale; -------------+\n"
 			"test it by loud singing.                                                  |\n"
+			"At the same time further intensity adjustments will be performed          |\n"
+			"and displayed on the second scale;                                        |\n"
+			"the average level of laud singing on this scale may be just below -20 dB. |\n"
 			"Also set your microphone position                                         |\n"
 			"to hear your voice but not your breathing.                                |\n"
 			"                                                                          |\n"
-			"Press space when done...                                      average   peak\n"
-			"                                                                 |        |\n"
-			"                     | -78 dB         -30 dB |         0 dB |    V        V\n");
+			"Press r to reset adjustments and space when done...           average   peak\n"
+			"                   -78                          -20  -10    0    |        |\n"
+			"                     |                            |    |    |    V        V\n");
 			//                    [########++++++------------------------]  -xx dB ( -xx dB)
 
-	bufferOutputStatsReset(&outputBuffer, true);
+	sbufferOutputStatsReset(&outputBuffer, true);
 	inputMode = INPUT_TO_OUTPUT;
 	outputMode = OUTPUT_PASS_STAT;
-	ttyReadKey();
+
+	{
+		bool retry = true;
+		while (retry) {
+			switch (ttyReadKey()) {
+				case 'r':
+					dBAdj = 20;
+					break;
+				case ' ':
+					retry = false;
+					break;
+			}
+		}
+	}
+
 	outputMode = OUTPUT_PASS;
 	Pa_Sleep(50);
-	bufferOutputStatsReset(&outputBuffer, false);
+	sbufferOutputStatsReset(&outputBuffer, false);
 	ttyClearStatus();
 
 
@@ -324,6 +351,7 @@ int main() {
 				.type = PACKET_HELO,
 				.version = PROT_VERSION,
 				.aioLatency = aioLat,
+				.dBAdj = dBAdj
 			};
 			strcpy(packet.name, name);
 			ssize_t err = send(udpSocket, (void *)&packet, (void *)strchr(packet.name, '\0') - (void *)&packet, 0);

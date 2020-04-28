@@ -24,6 +24,7 @@ struct packetClientHelo {
 	char type;
 	uint16_t version;
 	float aioLatency;
+	float dBAdj;
 	char name[100];
 };
 struct packetServerHelo {
@@ -36,12 +37,12 @@ struct packetClientData {
 	uint8_t clientID;
 	bindex_t recBlockIndex; // server index to be played on the client side
 	bindex_t blockIndex;
-	sample_t block[BLOCK_SIZE];
+	sample_t block[MONO_BLOCK_SIZE];
 };
 struct packetServerData {
 	char type;
 	bindex_t blockIndex;
-	sample_t block[BLOCK_SIZE];
+	sample_t block[STEREO_BLOCK_SIZE];
 };
 struct packetStatusStr {
 	char type;

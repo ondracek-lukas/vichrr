@@ -15,6 +15,10 @@
 #include <string.h>
 #include <math.h>
 
+#ifndef BLOCK_SIZE
+#define BLOCK_SIZE MONO_BLOCK_SIZE
+#endif
+
 struct audioBuffer {
 	bindex_t readPos;       // to be read
 	bindex_t writeLastPos;  // farest already written
@@ -249,3 +253,5 @@ void bufferOutputStatsReset(struct audioBuffer *buf, bool enable) {
 	buf->statEnabled = enable;
 	__sync_synchronize();
 }
+
+#undef BLOCK_SIZE

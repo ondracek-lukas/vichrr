@@ -9,6 +9,7 @@
 
 #include "main.h"
 #include "audioBuffer.h"
+#include "surround.h"
 #include "net.h"
 #include "tty.h"
 
@@ -18,7 +19,9 @@ struct client {
 	int64_t lastPacketUsec;
 	float aioLatency;
 	float restLatency;
-	sample_t *lastReadBlock;
+	float dBAdj;
+	sample_t lastReadBlock[STEREO_BLOCK_SIZE];
+	struct surroundCtx surroundCtx;
 	struct audioBuffer buffer;
 	char name[NAME_LEN + 1];
 };
@@ -100,6 +103,8 @@ void *udpReceiver(void *none) {
 				bufferClear(&client->buffer, 0);
 				client->lastPacketUsec = getUsec(usecZero);
 				client->aioLatency = packet->cHelo.aioLatency;
+				client->dBAdj = packet->cHelo.dBAdj;
+				surroundInitCtx(&client->surroundCtx, client->dBAdj, 0, 2);
 				bufferOutputStatsReset(&client->buffer, true);
 				__sync_synchronize();
 				client->connected = true;
@@ -108,6 +113,20 @@ void *udpReceiver(void *none) {
 				packet->sHelo.initBlockIndex = blockIndex;
 				sendto(udpSocket, packetRaw, sizeof(struct packetServerHelo), 0, (struct sockaddr *)&addr, sizeof(addr));
 				msg("New client '%s' with id %d accepted...", client->name, freeClient);
+				{
+					size_t clientsCnt = 0;
+					for (ssize_t i = 0; i < MAX_CLIENTS; i++) {
+						if (!clients[i] || !clients[i]->connected) continue;
+						clientsCnt++;
+					}
+					size_t clientI = 0;
+					for (ssize_t i = 0; i < MAX_CLIENTS; i++) {
+						if (!clients[i] || !clients[i]->connected) continue;
+						surroundInitCtx(&clients[i]->surroundCtx, clients[i]->dBAdj, M_PI * ((float)clientI / (clientsCnt-1) - 0.5f), 2);
+						clientI++;
+					}
+				}
+
 				break;
 			case PACKET_DATA:
 				if (
@@ -116,7 +135,7 @@ void *udpReceiver(void *none) {
 						!netAddrsEqual(&addr, &clients[packet->cData.clientID]->addr)
 					) break;
 				client = clients[packet->cData.clientID];
-				client->restLatency = (float) BLOCK_SIZE / SAMPLE_RATE * 1000 *
+				client->restLatency = (float) MONO_BLOCK_SIZE / SAMPLE_RATE * 1000 *
 					((int)blockIndex - packet->cData.recBlockIndex + packet->cData.blockIndex - client->buffer.readPos); // XXX check
 				bufferWrite(&client->buffer, packet->cData.blockIndex, packet->cData.block);
 				client->lastPacketUsec = getUsec(usecZero);
@@ -129,7 +148,7 @@ void *udpReceiver(void *none) {
 }
 
 int64_t getBlockUsec(bindex_t index) {
-	return (int64_t)index * 1000000 * BLOCK_SIZE / SAMPLE_RATE;
+	return (int64_t)index * 1000000 * MONO_BLOCK_SIZE / SAMPLE_RATE;
 }
 
 void getStatusStr(char **s, struct client *client) {
@@ -142,7 +161,7 @@ void getStatusStr(char **s, struct client *client) {
 	}
 	float avg, peak;
 	bufferOutputStats(&client->buffer, &avg, &peak);
-	ttyFormatSndLevel(s, avg, peak);
+	ttyFormatSndLevel(s, avg + client->dBAdj, peak + client->dBAdj);
 	*(*s)++ = '\n';
 }
 
@@ -166,15 +185,15 @@ int main() {
 
 		// sound mixing [
 
-		sample_t mixedBlock[BLOCK_SIZE];
+		sample_t mixedBlock[STEREO_BLOCK_SIZE];
 		sample_t *block = packet.block;
-		memset(mixedBlock, 0, BLOCK_SIZE * sizeof(sample_t));
+		memset(mixedBlock, 0, STEREO_BLOCK_SIZE * sizeof(sample_t));
 		packet.blockIndex = blockIndex;
 		for (size_t c = 0; c < MAX_CLIENTS; c++) {
 			if (clients[c] && clients[c]->connected) {
-				sample_t *clientBlock = bufferReadNext(&clients[c]->buffer);
-				clients[c]->lastReadBlock = clientBlock;
-				for (size_t i = 0; i < BLOCK_SIZE; i++) {
+				sample_t *clientBlock = clients[c]->lastReadBlock;
+				surroundFilter(&clients[c]->surroundCtx, bufferReadNext(&clients[c]->buffer), clientBlock);
+				for (size_t i = 0; i < STEREO_BLOCK_SIZE; i++) {
 					mixedBlock[i] += clientBlock[i];
 				}
 			}
@@ -182,7 +201,7 @@ int main() {
 		for (size_t c = 0; c < MAX_CLIENTS; c++) {
 			if (clients[c] && clients[c]->connected) {
 				sample_t *clientBlock = clients[c]->lastReadBlock;
-				for (size_t i = 0; i < BLOCK_SIZE; i++) {
+				for (size_t i = 0; i < STEREO_BLOCK_SIZE; i++) {
 					block[i] = mixedBlock[i] - clientBlock[i];
 				}
 				ssize_t err = sendto(udpSocket, &packet, sizeof(struct packetServerData), 0,
@@ -245,7 +264,7 @@ int main() {
 			}
 		}
 		if (blockIndex % 1000 == 0) {
-			msg("Sound mixer load: %6.2f %%", (float)(getBlockUsec(1000) - usecFreeSum)/getBlockUsec(1000));
+			msg("Sound mixer load: %6.2f %%", (float)(getBlockUsec(1000) - usecFreeSum)/getBlockUsec(1000) * 100);
 			usecFreeSum = 0;
 		}
 		__sync_synchronize();
