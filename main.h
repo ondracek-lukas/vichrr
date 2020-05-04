@@ -2,9 +2,9 @@
 
 #define _GNU_SOURCE
 
-#define PROT_VERSION         2
-#define APP_VERSION        0.2
-#define UDP_PORT          1234
+#define PROT_VERSION         3
+#define APP_VERSION        0.3
+#define UDP_PORT         64199
 #define NAME_LEN            10
 #define MAX_CLIENTS        100
 #define BLOCKS_PER_STAT    100
@@ -22,6 +22,7 @@
 #define STATUS_WIDTH        79
 #define STATUS_HEIGHT      100
 #define STATUS_LINES_PER_PACKET 4
+#define SHELO_STR_LEN      500
 
 #define STR(arg) STR2(arg)
 #define STR2(arg) #arg

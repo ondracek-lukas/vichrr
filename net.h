@@ -17,7 +17,8 @@
 enum packetType {
 	PACKET_HELO,
 	PACKET_DATA,
-	PACKET_STATUS
+	PACKET_STATUS,
+	PACKET_KEY_PRESS
 };
 
 struct packetClientHelo {
@@ -31,11 +32,12 @@ struct packetServerHelo {
 	char type;
 	uint8_t clientID;
 	bindex_t initBlockIndex;
+	char str[SHELO_STR_LEN]; // "keys\nhelp"
 };
 struct packetClientData {
 	char type;
 	uint8_t clientID;
-	bindex_t recBlockIndex; // server index to be played on the client side
+	bindex_t playBlockIndex; // server index to be played on the client side
 	bindex_t blockIndex;
 	sample_t block[MONO_BLOCK_SIZE];
 };
@@ -46,11 +48,17 @@ struct packetServerData {
 };
 struct packetStatusStr {
 	char type;
-	char packetIndex;
-	char packetsCnt;
+	uint8_t packetIndex;
+	uint8_t packetsCnt;
 	bindex_t statusIndex;
 	char str[STATUS_LINES_PER_PACKET * (STATUS_WIDTH + 1)];
 		// (size of whole IP packet might be limited to 576 B;  IP header is 20--60 B, UDP header is 8 B)
+};
+struct packetKeyPress {
+	char type;
+	uint8_t clientID;
+	bindex_t playBlockIndex;
+	int key;
 };
 
 union packet {
@@ -59,6 +67,7 @@ union packet {
 	struct packetClientData cData;
 	struct packetServerData sData;
 	struct packetStatusStr  sStat;
+	struct packetKeyPress   cKeyP;
 };
 
 

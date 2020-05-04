@@ -141,6 +141,7 @@ float ttyPromptFloat(char *prompt) {
 
 char ttyStatusStr[STATUS_HEIGHT * (STATUS_WIDTH + 1) + 1];
 int ttyStatusLines = 0;
+int ttyPrevStatusLines = 0;
 void ttyUpdateStatus(char *s, int firstLine) {
 	int i, l = firstLine;
 	char *s2;
@@ -177,6 +178,13 @@ void ttyResetStatus() {
 }
 
 void ttyPrintStatus() {
+	{
+		int tmp = ttyStatusLines;
+		if (ttyPrevStatusLines > ttyStatusLines) {
+			ttyUpdateStatus("", ttyPrevStatusLines - 1);
+		}
+		ttyPrevStatusLines = tmp;
+	}
 	ttyStatusStr[ttyStatusLines * (STATUS_WIDTH + 1)] = '\0';
 	printf("%s", ttyStatusStr);
 	ttyMoveUp(ttyStatusLines);
@@ -208,6 +216,6 @@ void ttyFormatSndLevel(char **s, float dBAvg, float dBPeak) {
 		*(*s)++ = dBAvg > db ? '#' : dBPeak > db ? '+' : '-';
 	}
 	*(*s)++ = ']';
-	*s += sprintf(*s, " %4.0f dB (%4.0f dB)", dBAvg, dBPeak);
+	*s += sprintf(*s, "%4.0f dB (%4.0f dB)", dBAvg, dBPeak);
 	// Lukas........100+100 ms  [########++++++------------------------] -90 dB (-90 dB)
 }

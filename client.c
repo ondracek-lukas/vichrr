@@ -1,5 +1,7 @@
 // Virtual Choir Rehearsal Room  Copyright (C) 2020  Lukas Ondracek <ondracek.lukas@gmail.com>, use under GNU GPLv3
 
+#include "main.h"
+
 #include <string.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -7,7 +9,6 @@
 #include <stdlib.h>
 #include <float.h>
 
-#include "main.h"
 #include "stereoBuffer.h"
 #include "net.h"
 #include "tty.h"
@@ -20,6 +21,11 @@ pthread_t inputThread, outputThread, udpThread;
 uint8_t clientID;
 float aioLat = 0;
 float dBAdj = 20;
+char sHeloStr[SHELO_STR_LEN+1];
+char *serverKeys;
+char *serverKeysDesc;
+char *clientKeysDesc;
+
 
 volatile enum inputMode {
 	INPUT_DISCARD,
@@ -55,10 +61,10 @@ static void *outputWorker(void *none) {
 			char str[200];
 			char *s = str;
 
-			s += sprintf(s, "%-20s ", "system level:");
+			s += sprintf(s, "%-21s ", "system level:");
 			ttyFormatSndLevel(&s, dBAvg, dBPeak);
 			*s++ = '\n';
-			s += sprintf(s, "%-20s ", "adjusted level:");
+			s += sprintf(s, "%-21s ", "adjusted level:");
 			ttyFormatSndLevel(&s, dBAvg + dBAdj, dBPeak + dBAdj);
 
 			ttyResetStatus();
@@ -107,7 +113,7 @@ static void *inputWorker(void *none) {
 		switch (inputMode) {
 			case INPUT_SEND:
 				packet.blockIndex = blockIndex++;
-				packet.recBlockIndex = outputBuffer.readPos; // XXX check latency calc
+				packet.playBlockIndex = outputBuffer.readPos; // XXX check latency calc
 				send(udpSocket, (void *)&packet, sizeof(packet), 0);
 				break;
 			case INPUT_TO_OUTPUT:
@@ -139,15 +145,25 @@ static void *udpReceiver(void *none) {
 	union packet *packet = (union packet *) &packetRaw;
 	ssize_t size;
 	int statusIndex = -1;
-	char packetsCnt = 0;
+	uint8_t packetsCnt = 0;
 	bool packetsReceived[256];
 
 	while ((size = recv(udpSocket, packetRaw, sizeof(union packet), 0)) >= 0) {
 		switch (packetRaw[0]) {
 			case PACKET_HELO:
-				if (size != sizeof(struct packetServerHelo)) break;
+				packetRaw[size] = '\0';
 				clientID = packet->sHelo.clientID;
 				sbufferClear(&outputBuffer, packet->sHelo.initBlockIndex);
+				strncpy(sHeloStr, packet->sHelo.str, SHELO_STR_LEN+1);
+				sHeloStr[SHELO_STR_LEN]='\0';
+				serverKeys = sHeloStr;
+				serverKeysDesc = strchr(sHeloStr, '\n');
+				if (*serverKeysDesc == '\n') {
+					*serverKeysDesc++ = '\0';
+				} else {
+					serverKeysDesc = "\0";
+				}
+				clientKeysDesc = "[^C]  exit";
 				printf("Connected.\n");
 				fflush(stdout);
 				__sync_synchronize();
@@ -162,12 +178,14 @@ static void *udpReceiver(void *none) {
 				if ((int)packet->sStat.statusIndex > statusIndex) {
 					statusIndex = packet->sStat.statusIndex;
 					packetsCnt = packet->sStat.packetsCnt;
-					for (int i = 0; i < packetsCnt; i++) {
+					for (int i = 0; i < 256; i++) {
 						packetsReceived[i] = false;
 					}
 					ttyResetStatus();
 				} else if (packet->sStat.statusIndex < statusIndex) {
 					break;
+				} else if (packetsCnt > packet->sStat.packetsCnt) {
+					packetsCnt = packet->sStat.packetsCnt;
 				}
 				packetsReceived[packet->sStat.packetIndex] = true;
 				ttyUpdateStatus(packet->sStat.str, STATUS_LINES_PER_PACKET * packet->sStat.packetIndex + 1);
@@ -178,7 +196,9 @@ static void *udpReceiver(void *none) {
 					}
 				}
 				if (complete) {
-					ttyPrintStatus(); // XXX different lines count
+					ttyUpdateStatus(serverKeysDesc, ttyStatusLines);
+					ttyUpdateStatus(clientKeysDesc, ttyStatusLines);
+					ttyPrintStatus();
 				}
 				break;
 		}
@@ -186,7 +206,7 @@ static void *udpReceiver(void *none) {
 	ttyClearStatus();
 	udpState = UDP_CLOSED;
 	inputMode = INPUT_DISCARD;
-	printf("Connection lost, connect again? (y/n): ");
+	printf("\nConnection lost, connect again? (y/n): ");
 	fflush(stdout);
 }
 
@@ -231,7 +251,7 @@ int main() {
 	printf("\n== 2/4 == MEASURE DELAY OF SOUND SYSTEM =======================================\n\n");
 
 	printf(
-			"Now, take your headphones OFF your ears,\n"
+			"Take your headphones OFF your ears,\n"
 			"place microphone closer to audio source if possible,\n"
 			"and press space to continue...\n"
 			"\n"
@@ -240,9 +260,8 @@ int main() {
 			"\n"
 			"In case of failure, you can use loudspeaker temporarily.\n"
 			"\n"
-			"Later you will see this delay + all the remaining delay in both directions\n"
-			"(in application, network, etc.).\n");
-
+			"Later you will see delay in form `A+B ms`, where A is this delay\n"
+			"while B is all the remaining round-trip delay (in application, network, etc.).\n");
 
 	ttyReadKey();
 	do {
@@ -288,22 +307,24 @@ int main() {
 			"Connect your headphones and press space...\n");
 	ttyReadKey();
 	printf(
+			"---\n\n"
+			"Sing loudly for a while, then press space to continue...\n"
 			"\n"
 			"You may hear the sound being recorded by your microphone\n"
 			"and see its average (#) and peak (+) intensity levels on the scales below.\n"
 			"Set your microphone volume in system settings so that\n"
-			"it's peak intensity never exceeds -10 dB on the first scale; -------------+\n"
-			"test it by loud singing.                                                  |\n"
-			"At the same time further intensity adjustments will be performed          |\n"
-			"and displayed on the second scale;                                        |\n"
-			"the average level of laud singing on this scale may be just below -20 dB. |\n"
-			"Also set your microphone position                                         |\n"
-			"to hear your voice but not your breathing.                                |\n"
-			"                                                                          |\n"
-			"Press r to reset adjustments and space when done...           average   peak\n"
-			"                   -78                          -20  -10    0    |        |\n"
-			"                     |                            |    |    |    V        V\n");
-			//                    [########++++++------------------------]  -xx dB ( -xx dB)
+			"it's peak intensity never exceeds -10 dB on the first scale; --------------+\n"
+			"test it by loud singing.                                                   |\n"
+			"At the same time further intensity adjustments will be performed           |\n"
+			"and displayed on the second scale;                                         |\n"
+			"the average level of laud singing on this scale may be just below -20 dB.  |\n"
+			"Also set your microphone position                                          |\n"
+			"to hear your voice but not your breathing.                                 |\n"
+			"                                                                           |\n"
+			"Press r to reset adjustments (and space when done)...          average   peak\n"
+			"                    -78                          -20  -10    0    |        |\n"
+			"                      |                            |    |    |    V        V\n");
+			//                     [########++++++------------------------]  -xx dB ( -xx dB)
 
 	sbufferOutputStatsReset(&outputBuffer, true);
 	inputMode = INPUT_TO_OUTPUT;
@@ -330,6 +351,12 @@ int main() {
 
 
 	printf("\n== 4/4 == SERVER SETTINGS =====================================================\n\n");
+	printf(
+			"Disclaimer:\n"
+			"  After entering server address,\n"
+			"  sound being recorded as well as all key presses to this application\n"
+			"  may be send unencrypted to the server.\n\n");
+
 	inputMode = INPUT_DISCARD;
 
 	char name[NAME_LEN+1];
@@ -354,7 +381,7 @@ int main() {
 				.dBAdj = dBAdj
 			};
 			strcpy(packet.name, name);
-			ssize_t err = send(udpSocket, (void *)&packet, (void *)strchr(packet.name, '\0') - (void *)&packet, 0);
+			send(udpSocket, (void *)&packet, (void *)strchr(packet.name, '\0') - (void *)&packet, 0);
 		}
 
 		udpState = UDP_OPEN;
@@ -366,7 +393,16 @@ int main() {
 			switch (udpState) {
 				case UDP_OPEN:
 					switch (c) {
-						case 'q': goto EXIT;
+						default:
+							if (strchr(serverKeys, c)) {
+								struct packetKeyPress packet = {
+									.type = PACKET_KEY_PRESS,
+									.clientID = clientID,
+									.playBlockIndex = outputBuffer.readPos,
+									.key = c
+								};
+								send(udpSocket, (void *)&packet, sizeof(struct packetKeyPress), 0);
+							}
 					}; break;
 				case UDP_CLOSED:
 					switch (c) {
@@ -390,11 +426,12 @@ int main() {
 	inputMode = INPUT_END;
 	outputMode = OUTPUT_END;
 	pthread_join(inputThread, NULL);
+	pthread_join(outputThread, NULL);
 	pthread_join(udpThread, NULL);
 	Pa_StopStream(paInputStream);
 	Pa_StopStream(paOutputStream);
 	Pa_Terminate();
 	netCleanup();
 
-	printf("n\n");
+	printf("\n");
 }
