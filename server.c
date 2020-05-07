@@ -9,7 +9,9 @@
 #include <stdlib.h>
 #include <pthread.h>
 
+#include "metronomeRes.h"
 #include "audioBuffer.h"
+#include "stereoBuffer.h"
 #include "surround.h"
 #include "net.h"
 #include "tty.h"
@@ -21,6 +23,7 @@ struct client {
 	int64_t lastPacketUsec;
 	float aioLatency;
 	float restLatency;
+	int metrDelay;
 	float dBAdj;
 	bindex_t lastKeyPress;
 	sample_t lastReadBlock[STEREO_BLOCK_SIZE];
@@ -34,8 +37,23 @@ struct client *clientsOrdered[MAX_CLIENTS]; // may temporarily contain duplicit/
 int udpSocket = -1;
 pthread_t udpThread;
 bindex_t blockIndex = 0;
-bindex_t statusIndex = 0;
 int64_t usecZero;
+
+struct {
+	bool enabled;
+	FILE *file;
+	bindex_t startTime;
+} recording;
+
+struct {
+	bool enabled;
+	float beatsPerMinute;
+	size_t beatsPerBar;
+	ssize_t lastBeatIndex;
+	size_t lastBeatBarIndex;
+	bindex_t lastBeatTime;
+	struct stereoBuffer buffer;
+} metronome;
 
 int64_t getUsec(int64_t zero) {
 	struct timespec tp;
@@ -170,18 +188,20 @@ void udpRecvHelo(struct client *client, struct packetClientHelo *packet) {
 	surroundInitCtx(&client->surroundCtx, client->dBAdj, 0, 2);
 	bufferOutputStatsReset(&client->buffer, true);
 	client->lastKeyPress = 0;
+	client->metrDelay = 0;
 	__sync_synchronize();
 	client->connected = true;
 
 	struct packetServerHelo packetR;
 	packetR.clientID = client->id;
 	packetR.initBlockIndex = blockIndex;
-	strncpy(packetR.str, "du\n" // "dumjkhln\n"
-		"[d/u] move down/up in list",
-//		"[m]   turn metronome on/off\n"
-//		"[j/k] decrease/increase beats per minute\n"
-//		"[h/l] decrease/increase beats per bar\n"
-//		"[n]   set metronome by multiple presses in rhythm and turn it on",
+	strncpy(packetR.str, "durmjkhl\n" // +n
+		"[d/u] move down/up in list\n"
+		"[r]   turn recording on/off\n"
+		"[m]   turn metronome on/off\n"
+		"[j/k] decrease/increase beats per minute\n"
+		"[h/l] decrease/increase beats per bar",
+		//"[n]   set metronome by multiple presses in rhythm and turn it on",
 		SHELO_STR_LEN);
 
 	udpSendPacket(client, &packetR, (void *)strchr(packetR.str, '\0') - (void *)&packetR);
@@ -190,8 +210,8 @@ void udpRecvHelo(struct client *client, struct packetClientHelo *packet) {
 
 void udpRecvData(struct client *client, struct packetClientData *packet) {
 	client->restLatency = (float) MONO_BLOCK_SIZE / SAMPLE_RATE * 1000 *
-		((int)blockIndex - packet->playBlockIndex + packet->blockIndex - client->buffer.readPos); // XXX check
-	bufferWrite(&client->buffer, packet->blockIndex, packet->block);
+		((int)blockIndex - packet->playBlockIndex + packet->blockIndex - client->buffer.readPos);
+	bufferWrite(&client->buffer, packet->blockIndex, packet->block, false);
 	client->lastPacketUsec = getUsec(usecZero);
 }
 
@@ -205,11 +225,57 @@ void udpRecvKeyPress(struct client *client, struct packetKeyPress *packet) {
 			clientMoveDown(client);
 			break;
 
+		case 'r': // toggle recording
+			if (!recording.enabled) {
+				char filename[100];
+				time_t t = time(NULL);
+				strftime(filename, sizeof(filename), "rehearsal_%Y-%m-%d_%H-%M-%S." STR(SAMPLE_RATE) "s16le2ch", localtime(&t));
+				recording.file = fopen(filename, "w");
+				if (recording.file) {
+					recording.startTime = blockIndex;
+					__sync_synchronize();
+					recording.enabled = true;
+				}
+			} else {
+				recording.enabled = false;
+				__sync_synchronize();
+				if (recording.file) {
+					fclose(recording.file);
+					recording.file = NULL;
+				}
+			}
+			break;
+
 		case 'm': // toggle metronome
+			if (metronome.enabled) {
+				metronome.enabled = false;
+			} else {
+				metronome.lastBeatTime = 0;
+				__sync_synchronize();
+				metronome.enabled = true;
+			}
+			break;
+
 		case 'j': // decrease beats per minute
+			if (metronome.beatsPerMinute / 1.1 >= METR_MIN_BPM) {
+				metronome.beatsPerMinute /= 1.1;
+			}
+			break;
 		case 'k': // increase beats per minute
+			if (metronome.beatsPerMinute * 1.1 <= METR_MAX_BPM) {
+				metronome.beatsPerMinute *= 1.1;
+			}
+			break;
 		case 'h': // decrease beats per bar
+			if (metronome.beatsPerBar > 0) {
+				metronome.beatsPerBar--;
+			}
+			break;
 		case 'l': // increase beats per bar
+			if (metronome.beatsPerBar < METR_MAX_BPB) {
+				metronome.beatsPerBar++;
+			}
+			break;
 		case 'n': // multiple-press metronome activation
 			break;
 	}
@@ -296,6 +362,62 @@ void getStatusStr(char **s, struct client *client) {
 	*(*s)++ = '\n';
 }
 
+// init status:                  &(s=NULL), newLineClient, false
+// commit line & begin new line: &s, newLineClient, false
+// flush status:                 &s, NULL, true
+void statusAppendLine(char **s, struct client *assignedClient, bool flush) {
+	static size_t l = 0;
+	static struct packetStatusStr packet = {
+		.type = PACKET_STATUS,
+		.packetsCnt = 255,
+		.packetIndex = 0,
+		.statusIndex = 0};
+
+	static struct {
+		struct client *client;
+		char *s;
+	} lines[STATUS_LINES_PER_PACKET];
+
+	if (!*s) { // init
+		packet.packetsCnt = 255;
+		packet.packetIndex = 0;
+		l = 0;
+		*s = packet.str;
+	} else if ((l >= STATUS_LINES_PER_PACKET) || flush) { // flush
+		if (flush) {
+			packet.packetsCnt = packet.packetIndex + 1;
+		}
+
+		**s = '\0';
+		FOR_CLIENTS(client) {
+			ssize_t k = -1;
+			for (size_t i = 0; i < l; i++) {
+				if (lines[i].client == client) {
+					k = i;
+					lines[i].s[0] = '.';
+					break;
+				}
+			}
+			udpSendPacket(client, &packet, (void *)*s - (void *)&packet);
+			if (k >= 0) {
+				lines[k].s[0] = ' ';
+			}
+		}
+
+		l = 0;
+		*s = packet.str;
+		packet.packetIndex++;
+		if (flush) {
+			packet.statusIndex++;
+			return;
+		}
+	}
+
+	lines[l].client = assignedClient;
+	lines[l].s = *s;
+	l++;
+}
+
 #define ERR(...) {msg(__VA_ARGS__); return 1; }
 int main() {
 	netInit();
@@ -306,6 +428,10 @@ int main() {
 
 	udpState = UDP_OPEN;
 	pthread_create(&udpThread, NULL, &udpReceiver, NULL);
+
+	metronome.enabled = false;
+	metronome.beatsPerMinute = METR_DEFAULT_BPM;
+	metronome.beatsPerBar = METR_DEFAULT_BPB;
 
 	usecZero = getUsec(0);
 	int64_t usecFreeSum = 0;
@@ -328,9 +454,26 @@ int main() {
 			}
 		}
 		FOR_CLIENTS(client) {
+			int playBeat = 0; // 1 for ordinary beat, 2 for main beat
+
+			sample_t *metrBlock = NULL;
+			if (metronome.enabled && metronome.lastBeatTime) {
+				int delay = ((client->aioLatency > 0 ? client->aioLatency : 20) + client->restLatency) * SAMPLE_RATE / 1000 / MONO_BLOCK_SIZE;
+				bool fadeIn = false, fadeOut = false;
+				if (client->metrDelay == 0) {
+					client->metrDelay = delay;
+					fadeIn = true;
+				} else if ((float)abs(client->metrDelay - delay) * MONO_BLOCK_SIZE / SAMPLE_RATE * 1000 > 15) {
+					fadeOut = true;
+					delay = client->metrDelay;
+					client->metrDelay = 0;
+				}
+				metrBlock = sbufferRead(&metronome.buffer, blockIndex + delay, fadeIn, fadeOut);
+			}
+
 			sample_t *clientBlock = client->lastReadBlock;
 			for (size_t i = 0; i < STEREO_BLOCK_SIZE; i++) {
-				block[i] = mixedBlock[i] - clientBlock[i];
+				block[i] = mixedBlock[i] - clientBlock[i] + (metrBlock ? metrBlock[i] : 0);
 			}
 			ssize_t err = udpSendPacket(client, &packet, sizeof(struct packetServerData));
 			// ssize_t err = sendto(udpSocket, &packet, sizeof(struct packetServerData), 0,
@@ -341,12 +484,98 @@ int main() {
 			}
 		}
 
+		if (recording.enabled) {
+			fwrite(mixedBlock, sizeof(mixedBlock), 1, recording.file);
+		}
+
 		// ] end of sound mixing
 
+		if (metronome.enabled) {
+			bindex_t nextBeatTime;
+			if (metronome.lastBeatTime == 0) {
+				nextBeatTime = blockIndex + ((uint32_t) METR_DELAY_MSEC * SAMPLE_RATE / 1000 / MONO_BLOCK_SIZE);
+				metronome.lastBeatIndex = -1;
+				metronome.lastBeatBarIndex = -1;
+				sbufferClear(&metronome.buffer, 0);
+				FOR_CLIENTS(client) {
+					client->metrDelay = 0;
+				}
+			} else {
+				nextBeatTime = metronome.lastBeatTime + (float)SAMPLE_RATE / MONO_BLOCK_SIZE / metronome.beatsPerMinute * 60;
+			}
+			if (nextBeatTime <= blockIndex + ((uint32_t) METR_DELAY_MSEC * SAMPLE_RATE / 1000 / MONO_BLOCK_SIZE)) {
+				metronome.lastBeatIndex++;
+				bool mainBeat = false;
+				if (metronome.beatsPerBar) {
+					metronome.lastBeatBarIndex = (metronome.lastBeatBarIndex + 1) % metronome.beatsPerBar;
+					mainBeat = metronome.lastBeatBarIndex == 0;
+				}
+				const sample_t *beat;
+				size_t beatSize;
+				if (mainBeat) {
+					beat = (const sample_t *) metronomeRes1;
+					beatSize = sizeof(metronomeRes1) / sizeof(sample_t);
+				} else {
+					beat = (const sample_t *) metronomeRes2;
+					beatSize = sizeof(metronomeRes2) / sizeof(sample_t);
+				}
+
+				metronome.lastBeatTime = nextBeatTime;
+				size_t i = 0;
+				while (i < beatSize) {
+					mixedBlock[i % STEREO_BLOCK_SIZE] = beat[i];
+					if (++i % STEREO_BLOCK_SIZE == 0) {
+						sbufferWrite(&metronome.buffer, nextBeatTime++, mixedBlock, true);
+					}
+				}
+				if (i % STEREO_BLOCK_SIZE) {
+					for (; i % STEREO_BLOCK_SIZE; i++) {
+						mixedBlock[i % STEREO_BLOCK_SIZE] = 0;
+					}
+					sbufferWrite(&metronome.buffer, nextBeatTime++, mixedBlock, true);
+				}
+			}
+		}
+
+
+		// status string [
+		if (blockIndex % BLOCKS_PER_STAT == 0) {
+
+			char *s = NULL;
+			statusAppendLine(&s, NULL, false);
+			s += sprintf(s, "---------------------  left\n");
+
+			FOR_CLIENTS_ORDERED(client) {
+				statusAppendLine(&s, client, false);
+				getStatusStr(&s, client);
+			}
+
+			statusAppendLine(&s, NULL, false);
+			s += sprintf(s, "---------------------  right\n");
+
+			statusAppendLine(&s, NULL, false);
+			*s++ = '\n';
+
+			statusAppendLine(&s, NULL, false);
+			s += sprintf(s, "metronome:        %3s %2d beats per bar, %3.0f beats per minute\n",
+					(metronome.enabled ? "ON" : "OFF"), metronome.beatsPerBar, metronome.beatsPerMinute);
+
+			statusAppendLine(&s, NULL, false);
+			if (recording.enabled) {
+				float durSec = (blockIndex - recording.startTime) * MONO_BLOCK_SIZE / SAMPLE_RATE;
+				s += sprintf(s, "recording:         ON  %02d:%02d\n", (int)durSec / 60, (int)durSec % 60);
+			} else {
+				s += sprintf(s, "recording:        OFF\n");
+			}
+
+			statusAppendLine(&s, NULL, true);
+		}
+		// ] end of status string
 
 		int64_t usec = getUsec(usecZero);
 		int64_t usecWait = getBlockUsec(++blockIndex) - usec;
 		usecFreeSum += usecWait;
+
 		if (blockIndex % 50 == 0) {
 			FOR_CLIENTS(client) {
 				if (usec - client->lastPacketUsec > 1000000) {
@@ -355,67 +584,7 @@ int main() {
 				}
 			}
 		}
-		if (blockIndex % BLOCKS_PER_STAT == 0) {
-			struct packetStatusStr packet = {
-				.type = PACKET_STATUS,
-				.packetsCnt = 2,
-				.packetIndex = 0,
-				.statusIndex = statusIndex++};
 
-			struct clientsLines {
-				struct client *client;
-				char *s;
-			} clientsLines[STATUS_LINES_PER_PACKET];
-
-			FOR_CLIENTS(client) packet.packetsCnt++;
-			packet.packetsCnt = (packet.packetsCnt + STATUS_LINES_PER_PACKET - 1) / STATUS_LINES_PER_PACKET;
-
-			char *s = packet.str;
-			size_t l = 0;
-			clientsLines[0] = (struct clientsLines) { NULL, s };
-			s += sprintf(s, "---------------------  left\n"); l++;
-			FOR_CLIENTS_ORDERED(client) {
-				clientsLines[l % STATUS_LINES_PER_PACKET] = (struct clientsLines) {client, s};
-				getStatusStr(&s, client);
-
-				if (++l % STATUS_LINES_PER_PACKET == 0) {
-					*s = '\0';
-					FOR_CLIENTS(clientReceiver) {
-						ssize_t clientLine = -1;
-						for (size_t i = 0; i < STATUS_LINES_PER_PACKET; i++) {
-							if (clientsLines[i].client == clientReceiver) {
-								clientLine = i;
-								clientsLines[i].s[0] = '.';
-								break;
-							}
-						}
-						udpSendPacket(clientReceiver, &packet, (void *)s - (void *)&packet);
-						if (clientLine >= 0) {
-							clientsLines[clientLine].s[0] = ' ';
-						}
-					}
-					packet.packetIndex++;
-					s = packet.str;
-				}
-			}
-			s += sprintf(s, "---------------------  right\n");
-			*s = '\0';
-			FOR_CLIENTS(clientReceiver) {
-				ssize_t clientLine = -1;
-				for (size_t i = 0; i < (l % STATUS_LINES_PER_PACKET); i++) {
-					if (clientsLines[i].client == clientReceiver) {
-						clientLine = i;
-						clientsLines[i].s[0] = '.';
-						break;
-					}
-				}
-				udpSendPacket(clientReceiver, &packet, (void *)s - (void *)&packet);
-				if (clientLine >= 0) {
-					clientsLines[clientLine].s[0] = ' ';
-				}
-			}
-
-		}
 		if (blockIndex % 1000 == 0) {
 			msg("Sound mixer load: %6.2f %%", (float)(getBlockUsec(1000) - usecFreeSum)/getBlockUsec(1000) * 100);
 			usecFreeSum = 0;

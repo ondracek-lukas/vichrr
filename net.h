@@ -183,8 +183,8 @@ int netOpenConn(char *addr, char *port) {
 	DWORD tv = 1000;
 #else
 	struct timeval tv;
-	tv.tv_sec = 0;
-	tv.tv_usec = 1000000;
+	tv.tv_sec = 1;
+	tv.tv_usec = 0;
 #endif
 	if (setsockopt(sfd, SOL_SOCKET, SO_RCVTIMEO, (void *) &tv,sizeof(tv)) < 0) {
 			perror("Error");

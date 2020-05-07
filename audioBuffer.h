@@ -42,7 +42,7 @@ struct audioBuffer {
 };
 
 // fading within one block in case of discontinuity slightly reduces crackling
-float bufferFade(int index) { // XXX optimize
+float bufferFade(int index) {
 	/*
 	static float cache[BLOCK_SIZE] = {-1};
 	if (cache[0] < 0) {
@@ -82,10 +82,46 @@ void bufferClear(struct audioBuffer *buf, bindex_t readPos) {
 	}
 }
 
+sample_t *bufferRead(struct audioBuffer *buf, bindex_t pos, bool fadeIn, bool fadeOut) {
+	sample_t *retData;
+
+	if ((fadeIn && fadeOut) ||
+			(pos + BUFFER_BLOCKS <= buf->writeLastPos) || (pos > buf->writeLastPos) ||
+			(buf->blockState[pos % BUFFER_BLOCKS] != BLOCK_USED)) {
+		retData = buf->tmpBlock;
+		memset(retData, 0, BLOCK_SIZE * sizeof(sample_t));
+		return retData;
+	}
+
+	retData = buf->data + (pos % BUFFER_BLOCKS) * BLOCK_SIZE;
+	if (fadeIn || fadeOut) {
+		// fade-in/fade-out should be performed within the block because of some discontinuity
+		sample_t *tmpData = buf->tmpBlock;
+		if (fadeOut) {
+			for (int i = 0; i < BLOCK_SIZE; i++) {
+				tmpData[i] = retData[i] * bufferFade(BLOCK_SIZE - i - 1);
+			}
+		} else { // fadeIn
+			for (int i = 0; i < BLOCK_SIZE; i++) {
+				tmpData[i] = retData[i] * bufferFade(i);
+			}
+		}
+		retData = tmpData;
+	}
+	return retData;
+}
+
+// low-latency reading
 sample_t *bufferReadNext(struct audioBuffer *buf) {
 	__sync_synchronize();
 	bindex_t writeLastPos = buf->writeLastPos;
 	bindex_t readPos = buf->readPos;
+
+	if (readPos + BUFFER_BLOCKS <= writeLastPos) {
+		// writing occurred too far apart reading, this shouldn't happen
+		buf->readPos = readPos = writeLastPos - BUFFER_BLOCKS/2;
+		buf->fade = true; // no fade out before it
+	}
 
 	// propose skipping part of the stream if latency is too high
 	int propSkip = 0;
@@ -144,25 +180,10 @@ sample_t *bufferReadNext(struct audioBuffer *buf) {
 		// a block is available and should be returned
 		buf->readPos = readPos + 1;
 		__sync_synchronize();
-		buf->blockState[readPos % BUFFER_BLOCKS] = BLOCK_EMPTY;
-		retData = buf->data + (readPos % BUFFER_BLOCKS) * BLOCK_SIZE;
+		retData = bufferRead(buf, readPos, buf->fade, fadeOut);
 
-		// fade-in/fade-out should be performed within the block because of some discontinuity
-		if (buf->fade || fadeOut) {
-			sample_t *tmpData = buf->tmpBlock;
-			if (fadeOut) {
-				for (int i = 0; i < BLOCK_SIZE; i++) {
-					tmpData[i] = retData[i] * bufferFade(BLOCK_SIZE - i - 1);
-				}
-				buf->fade = true;
-			} else { // fade-in
-				for (int i = 0; i < BLOCK_SIZE; i++) {
-					tmpData[i] = retData[i] * bufferFade(i);
-				}
-				buf->fade = false;
-			}
-			retData = tmpData;
-		}
+		buf->fade = fadeOut;
+
 		buf->nullReads = 0;
 
 	} else {
@@ -178,9 +199,6 @@ sample_t *bufferReadNext(struct audioBuffer *buf) {
 		// after block being returned, part of the stream will be skipped
 		readPos = buf->readPos;
 		buf->readPos = readPos + propSkip;
-		for (; propSkip--; readPos++) {
-			buf->blockState[readPos % BUFFER_BLOCKS] = BLOCK_EMPTY;
-		}
 		buf->skipCondDur = 0;
 	}
 
@@ -211,19 +229,29 @@ sample_t *bufferReadNext(struct audioBuffer *buf) {
 	return retData;
 }
 
-bool bufferWrite(struct audioBuffer *buf, bindex_t pos, sample_t *data) {
-	bindex_t readPos = buf->readPos;
-	if ((pos < readPos) || (pos >= readPos + BUFFER_BLOCKS - 1) || (buf->blockState[pos % BUFFER_BLOCKS] != BLOCK_EMPTY)) {
+bool bufferWrite(struct audioBuffer *buf, bindex_t pos, sample_t *data, bool add) {
+	if (buf->writeLastPos < pos) {
+		do {
+			buf->blockState[++buf->writeLastPos % BUFFER_BLOCKS] = BLOCK_EMPTY;
+		} while (buf->writeLastPos < pos);
+		__sync_synchronize();
+	}
+
+	if (pos < buf->readPos) {
 		return false;
 	}
-	
-	memcpy(buf->data + (pos % BUFFER_BLOCKS) * BLOCK_SIZE, data, BLOCK_SIZE * sizeof(sample_t));
+
+	if (!add || (buf->blockState[pos % BUFFER_BLOCKS] == BLOCK_EMPTY)) {
+		memcpy(buf->data + (pos % BUFFER_BLOCKS) * BLOCK_SIZE, data, BLOCK_SIZE * sizeof(sample_t));
+	} else {
+		sample_t *block = buf->data + (pos % BUFFER_BLOCKS) * BLOCK_SIZE;
+		for (size_t i = 0; i < BLOCK_SIZE; i++) {
+			block[i] += data[i];
+		}
+	}
 
 	__sync_synchronize();
 	buf->blockState[pos % BUFFER_BLOCKS] = BLOCK_USED;
-	if (buf->writeLastPos < pos) {
-		buf->writeLastPos = pos;
-	}
 
 	return true;
 }
@@ -238,10 +266,8 @@ void bufferPrintStats(struct audioBuffer *buf) { // tmp
 }
 */
 
-// --- stats ---
+// --- stats (when readNext is used) ---
 
-// bufferOutputRootMeanSquareReset
-// bufferOutputPeakReset
 void bufferOutputStats(struct audioBuffer *buf, float *dBAvg, float *dBPeak) {
 	// *dBAvg = 10 * log10f((float)buf->statSumSq / buf->statCnt / (1ll << (2 * sizeof(sample_t) * 8 - 2)));
 	// *dBPeak = 10 * log10f((float)buf->statMaxSq / (1ll << (2 * sizeof(sample_t) * 8 - 2)));

@@ -22,7 +22,7 @@ uint8_t clientID;
 float aioLat = 0;
 float dBAdj = 20;
 char sHeloStr[SHELO_STR_LEN+1];
-char *serverKeys;
+char *serverKeys = "";
 char *serverKeysDesc;
 char *clientKeysDesc;
 
@@ -93,12 +93,6 @@ static void *inputWorker(void *none) {
 			switch (inputMode) {
 				case INPUT_TO_OUTPUT:
 					sbufferClear(&outputBuffer, 0);
-					/*
-					memset(blockMono, 0, sizeof(blockMono)); // XXX
-					for (int i = 0; i < 30; i++) {
-						sbufferWrite(&outputBuffer, blockIndex++, blockMono);
-					}
-					*/
 					break;
 				case INPUT_MEASURE_LATENCY:
 					sbufferClear(&outputBuffer, 0);
@@ -113,18 +107,18 @@ static void *inputWorker(void *none) {
 		switch (inputMode) {
 			case INPUT_SEND:
 				packet.blockIndex = blockIndex++;
-				packet.playBlockIndex = outputBuffer.readPos; // XXX check latency calc
+				packet.playBlockIndex = outputBuffer.readPos;
 				send(udpSocket, (void *)&packet, sizeof(packet), 0);
 				break;
 			case INPUT_TO_OUTPUT:
-				sbufferWrite(&outputBuffer, blockIndex++, blockStereo);
+				sbufferWrite(&outputBuffer, blockIndex++, blockStereo, false);
 				break;
 			case INPUT_MEASURE_LATENCY:
 				aioLatBlock(blockMono, blockIndex - outputBuffer.readPos);
 				for (size_t i = 0; i < MONO_BLOCK_SIZE; i++) {
 					blockStereo[2 * i] = blockStereo[2 * i + 1] = blockMono[i];
 				}
-				sbufferWrite(&outputBuffer, blockIndex++, blockStereo);
+				sbufferWrite(&outputBuffer, blockIndex++, blockStereo, false);
 				break;
 			case INPUT_DISCARD:
 			case INPUT_END:
@@ -148,7 +142,7 @@ static void *udpReceiver(void *none) {
 	uint8_t packetsCnt = 0;
 	bool packetsReceived[256];
 
-	while ((size = recv(udpSocket, packetRaw, sizeof(union packet), 0)) >= 0) {
+	while ((size = recv(udpSocket, packetRaw, sizeof(union packet), 0)) > 0) {
 		switch (packetRaw[0]) {
 			case PACKET_HELO:
 				packetRaw[size] = '\0';
@@ -171,7 +165,7 @@ static void *udpReceiver(void *none) {
 				break;
 			case PACKET_DATA:
 				if ((inputMode != INPUT_SEND) || (size != sizeof(struct packetServerData))) break;
-				sbufferWrite(&outputBuffer, packet->sData.blockIndex, packet->sData.block);
+				sbufferWrite(&outputBuffer, packet->sData.blockIndex, packet->sData.block, false);
 				break;
 			case PACKET_STATUS:
 				packetRaw[size] = '\0';
