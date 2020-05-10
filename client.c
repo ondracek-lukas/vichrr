@@ -31,6 +31,7 @@ volatile enum inputMode {
 	INPUT_DISCARD,
 	INPUT_MEASURE_LATENCY,
 	INPUT_TO_OUTPUT,
+	INPUT_NULL_TO_OUTPUT,
 	INPUT_SEND,
 	INPUT_END
 } inputMode = INPUT_DISCARD;
@@ -38,6 +39,7 @@ volatile enum inputMode {
 volatile enum outputMode {
 	OUTPUT_PASS,
 	OUTPUT_PASS_STAT,
+	OUTPUT_NULL,
 	OUTPUT_END
 } outputMode = OUTPUT_PASS;
 
@@ -49,7 +51,12 @@ volatile enum udpState {
 static void *outputWorker(void *none) {
 	while (outputMode != OUTPUT_END) {
 		__sync_synchronize();
-		sample_t *blockStereo = sbufferReadNext(&outputBuffer);
+		sample_t *blockStereo = NULL;
+		if (outputMode == OUTPUT_NULL) {
+			blockStereo = sbufferRead(&outputBuffer, 0, true, true);
+		} else {
+			blockStereo = sbufferReadNext(&outputBuffer);
+		}
 		PaError err = Pa_WriteStream(paOutputStream, blockStereo, MONO_BLOCK_SIZE);
 		if ((outputMode == OUTPUT_PASS_STAT) && (outputBuffer.readPos % 50 == 0)) {
 			float dBAvg, dBPeak;
@@ -92,10 +99,10 @@ static void *inputWorker(void *none) {
 			blockIndex = 0;
 			switch (inputMode) {
 				case INPUT_TO_OUTPUT:
-					sbufferClear(&outputBuffer, 0);
+					//sbufferClear(&outputBuffer, 0);
 					break;
 				case INPUT_MEASURE_LATENCY:
-					sbufferClear(&outputBuffer, 0);
+					//sbufferClear(&outputBuffer, 0);
 					aioLatReset();
 					break;
 				case INPUT_SEND:
@@ -111,14 +118,18 @@ static void *inputWorker(void *none) {
 				send(udpSocket, (void *)&packet, sizeof(packet), 0);
 				break;
 			case INPUT_TO_OUTPUT:
-				sbufferWrite(&outputBuffer, blockIndex++, blockStereo, false);
+				sbufferWriteNext(&outputBuffer, blockStereo, false);
+				break;
+			case INPUT_NULL_TO_OUTPUT:
+				memset(blockStereo, 0, sizeof(sample_t) * STEREO_BLOCK_SIZE);
+				sbufferWriteNext(&outputBuffer, blockStereo, false);
 				break;
 			case INPUT_MEASURE_LATENCY:
-				aioLatBlock(blockMono, blockIndex - outputBuffer.readPos);
+				aioLatBlock(blockMono, outputBuffer.writeLastPos + 1 - outputBuffer.readPos);
 				for (size_t i = 0; i < MONO_BLOCK_SIZE; i++) {
 					blockStereo[2 * i] = blockStereo[2 * i + 1] = blockMono[i];
 				}
-				sbufferWrite(&outputBuffer, blockIndex++, blockStereo, false);
+				sbufferWriteNext(&outputBuffer, blockStereo, false);
 				break;
 			case INPUT_DISCARD:
 			case INPUT_END:
@@ -200,6 +211,7 @@ static void *udpReceiver(void *none) {
 	ttyClearStatus();
 	udpState = UDP_CLOSED;
 	inputMode = INPUT_DISCARD;
+	//outputMode = OUTPUT_NULL;
 	printf("\nConnection lost, connect again? (y/n): ");
 	fflush(stdout);
 }
@@ -266,8 +278,8 @@ int main() {
 		int i = 0;
 		while ((succCnt < 5) && ((i++ < 10) || (value > 0))) {
 			inputMode = INPUT_MEASURE_LATENCY;
-			Pa_Sleep(450);
-			inputMode = INPUT_DISCARD;
+			Pa_Sleep(200);
+			inputMode = INPUT_NULL_TO_OUTPUT;
 			Pa_Sleep(50);
 			value = aioLatReset();
 			if (value > 0) {
@@ -352,6 +364,7 @@ int main() {
 			"  may be send unencrypted to the server.\n\n");
 
 	inputMode = INPUT_DISCARD;
+	//outputMode = OUTPUT_NULL;
 
 	char name[NAME_LEN+1];
 

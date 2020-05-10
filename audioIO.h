@@ -163,8 +163,8 @@ bool aioConnectAudio(PaStream **paInputStream, PaStream **paOutputStream) {
 
 // --- measuring latency ---
 
-#define WAIT_SAMPLES  (30 * MONO_BLOCK_SIZE)
-#define BEEP_SAMPLES  (30 * MONO_BLOCK_SIZE)
+#define WAIT_SAMPLES  (10 * MONO_BLOCK_SIZE)
+#define BEEP_SAMPLES  (20 * MONO_BLOCK_SIZE)
 
 uint64_t aioLatSqSums[BEEP_SAMPLES];
 uint64_t aioLatSqSum = 0;
@@ -175,7 +175,7 @@ int64_t  aioLatBufferLatBlocksSum = 0;
 
 void aioLatBlock(sample_t *block, int bufferLatBlocks) {
 	for (size_t i = 0; i < MONO_BLOCK_SIZE; i++) {
-		aioLatSqSum += block[i] * block[i];
+		aioLatSqSum += (uint64_t)block[i] * block[i];
 		if (aioLatPos > BEEP_SAMPLES) {
 			uint64_t diff = aioLatSqSum - aioLatSqSums[aioLatPos % BEEP_SAMPLES];
 			if (diff > aioLatMaxDiff) {
@@ -207,8 +207,7 @@ double aioLatReset() {
 		double signalToNoise =
 			((double)aioLatMaxDiff / BEEP_SAMPLES) /
 			((double)(aioLatSqSum - aioLatMaxDiff) / (aioLatPos - BEEP_SAMPLES));
-		if ((signalToNoise < 100) || (ret < 0)) ret = 0;
-		//printf("<signal to noise %lf>\n", signalToNoise);
+		if ((signalToNoise < 5) || (ret < 0)) ret = 0;
 	}
 
 	aioLatSqSum = 0;

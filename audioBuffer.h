@@ -256,6 +256,10 @@ bool bufferWrite(struct audioBuffer *buf, bindex_t pos, sample_t *data, bool add
 	return true;
 }
 
+bool bufferWriteNext(struct audioBuffer *buf, sample_t *data, bool add) {
+	return bufferWrite(buf, buf->writeLastPos + 1, data, add);
+}
+
 /*
 void bufferPrintStats(struct audioBuffer *buf) { // tmp
 	bindex_t readPos = buf->readPos;

@@ -6,6 +6,7 @@
 #define bufferReadNext sbufferReadNext
 #define bufferRead sbufferRead
 #define bufferWrite sbufferWrite
+#define bufferWriteNext sbufferWriteNext
 #define bufferOutputStats sbufferOutputStats
 #define bufferOutputStatsReset sbufferOutputStatsReset
 #define BLOCK_USED SBLOCK_USED
@@ -20,6 +21,7 @@
 #undef bufferReadNext
 #undef bufferRead
 #undef bufferWrite
+#undef bufferWriteNext
 #undef bufferOutputStats
 #undef bufferOutputStatsReset
 #undef BLOCK_USED
