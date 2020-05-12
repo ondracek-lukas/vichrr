@@ -96,7 +96,7 @@ void clientsSurroundReinit() {
 
 	size_t i = 0;
 	FOR_CLIENTS_ORDERED(client) {
-		surroundInitCtx(&client->surroundCtx, client->dBAdj, M_PI * ((float)i++ / (clientsCnt-1) - 0.5f), 2);
+		surroundInitCtx(&client->surroundCtx, client->dBAdj, M_PI * ((float)i++ / (clientsCnt-1 + 1e-20) - 0.5f), 2);
 	}
 }
 
@@ -365,7 +365,7 @@ void getStatusStr(char **s, struct client *client) {
 // init status:                  &(s=NULL), newLineClient, false
 // commit line & begin new line: &s, newLineClient, false
 // flush status:                 &s, NULL, true
-void statusAppendLine(char **s, struct client *assignedClient, bool flush) {
+void statusAppendLine(char **s, struct client *assignedClient, bool flush, bool log) {
 	static size_t l = 0;
 	static struct packetStatusStr packet = {
 		.type = PACKET_STATUS,
@@ -383,33 +383,38 @@ void statusAppendLine(char **s, struct client *assignedClient, bool flush) {
 		packet.packetIndex = 0;
 		l = 0;
 		*s = packet.str;
-	} else if ((l >= STATUS_LINES_PER_PACKET) || flush) { // flush
-		if (flush) {
-			packet.packetsCnt = packet.packetIndex + 1;
-		}
-
+	} else {
 		**s = '\0';
-		FOR_CLIENTS(client) {
-			ssize_t k = -1;
-			for (size_t i = 0; i < l; i++) {
-				if (lines[i].client == client) {
-					k = i;
-					lines[i].s[0] = '.';
-					break;
+		if (log) {
+			printf("%s", lines[l-1].s);
+		}
+		if ((l >= STATUS_LINES_PER_PACKET) || flush) { // flush
+			if (flush) {
+				packet.packetsCnt = packet.packetIndex + 1;
+			}
+
+			FOR_CLIENTS(client) {
+				ssize_t k = -1;
+				for (size_t i = 0; i < l; i++) {
+					if (lines[i].client == client) {
+						k = i;
+						lines[i].s[0] = '.';
+						break;
+					}
+				}
+				udpSendPacket(client, &packet, (void *)*s - (void *)&packet);
+				if (k >= 0) {
+					lines[k].s[0] = ' ';
 				}
 			}
-			udpSendPacket(client, &packet, (void *)*s - (void *)&packet);
-			if (k >= 0) {
-				lines[k].s[0] = ' ';
-			}
-		}
 
-		l = 0;
-		*s = packet.str;
-		packet.packetIndex++;
-		if (flush) {
-			packet.statusIndex++;
-			return;
+			l = 0;
+			*s = packet.str;
+			packet.packetIndex++;
+			if (flush) {
+				packet.statusIndex++;
+				return;
+			}
 		}
 	}
 
@@ -435,7 +440,10 @@ int main() {
 
 	usecZero = getUsec(0);
 	int64_t usecFreeSum = 0;
+	int64_t usecFreeMin = INT64_MAX;
 	struct packetServerData packet = { .type = PACKET_DATA };
+
+	msg("Virtual Choir Rehearsal Room, server v" STR(APP_VERSION) " started.");
 
 	while (udpState == UDP_OPEN) {
 		__sync_synchronize();
@@ -463,17 +471,25 @@ int main() {
 				if (client->metrDelay == 0) {
 					client->metrDelay = delay;
 					fadeIn = true;
-				} else if ((float)abs(client->metrDelay - delay) * MONO_BLOCK_SIZE / SAMPLE_RATE * 1000 > 15) {
-					fadeOut = true;
-					delay = client->metrDelay;
-					client->metrDelay = 0;
+				} else {
+					if ((float)abs(client->metrDelay - delay) * MONO_BLOCK_SIZE / SAMPLE_RATE * 1000 > 5) {
+						fadeOut = true;
+						delay = client->metrDelay;
+						client->metrDelay = 0;
+					} else {
+						delay = client->metrDelay;
+					}
 				}
 				metrBlock = sbufferRead(&metronome.buffer, blockIndex + delay, fadeIn, fadeOut);
 			}
 
 			sample_t *clientBlock = client->lastReadBlock;
 			for (size_t i = 0; i < STEREO_BLOCK_SIZE; i++) {
+#ifdef DEBUG_HEAR_SELF
+				block[i] = mixedBlock[i] + (metrBlock ? metrBlock[i] : 0);
+#else
 				block[i] = mixedBlock[i] - clientBlock[i] + (metrBlock ? metrBlock[i] : 0);
+#endif
 			}
 			ssize_t err = udpSendPacket(client, &packet, sizeof(struct packetServerData));
 			// ssize_t err = sendto(udpSocket, &packet, sizeof(struct packetServerData), 0,
@@ -536,31 +552,33 @@ int main() {
 				}
 			}
 		}
-
+		blockIndex++;
 
 		// status string [
 		if (blockIndex % BLOCKS_PER_STAT == 0) {
+			const bool log = blockIndex % BLOCKS_PER_SRV_STAT == 0;
+			if (log) msg("\n");
 
 			char *s = NULL;
-			statusAppendLine(&s, NULL, false);
+			statusAppendLine(&s, NULL, false, log);
 			s += sprintf(s, "---------------------  left\n");
 
 			FOR_CLIENTS_ORDERED(client) {
-				statusAppendLine(&s, client, false);
+				statusAppendLine(&s, client, false, log);
 				getStatusStr(&s, client);
 			}
 
-			statusAppendLine(&s, NULL, false);
+			statusAppendLine(&s, NULL, false, log);
 			s += sprintf(s, "---------------------  right\n");
 
-			statusAppendLine(&s, NULL, false);
+			statusAppendLine(&s, NULL, false, log);
 			*s++ = '\n';
 
-			statusAppendLine(&s, NULL, false);
+			statusAppendLine(&s, NULL, false, log);
 			s += sprintf(s, "metronome:        %3s %2d beats per bar, %3.0f beats per minute\n",
 					(metronome.enabled ? "ON" : "OFF"), metronome.beatsPerBar, metronome.beatsPerMinute);
 
-			statusAppendLine(&s, NULL, false);
+			statusAppendLine(&s, NULL, false, log);
 			if (recording.enabled) {
 				float durSec = (blockIndex - recording.startTime) * MONO_BLOCK_SIZE / SAMPLE_RATE;
 				s += sprintf(s, "recording:         ON  %02d:%02d\n", (int)durSec / 60, (int)durSec % 60);
@@ -568,13 +586,35 @@ int main() {
 				s += sprintf(s, "recording:        OFF\n");
 			}
 
-			statusAppendLine(&s, NULL, true);
+			statusAppendLine(&s, NULL, true, log);
+			if (log) printf("\n");
 		}
 		// ] end of status string
 
 		int64_t usec = getUsec(usecZero);
-		int64_t usecWait = getBlockUsec(++blockIndex) - usec;
+		int64_t usecWait = getBlockUsec(blockIndex) - usec;
+		usecFreeMin = (usecFreeMin > usecWait ? usecWait : usecFreeMin);
 		usecFreeSum += usecWait;
+
+		if (blockIndex % BLOCKS_PER_SRV_STAT == 0) {
+			printf("BLOCKS      play  lost  wait  skip  delay  metr       read    write\n", "");
+			FOR_CLIENTS_ORDERED(client) {
+				size_t play, lost, wait, skip;
+				ssize_t delay;
+				bufferSrvStatsReset(&client->buffer, &play, &lost, &wait, &skip, &delay);
+				printf("%-10s %5u %5u %5u %5u %6d %5d   %8d %8d\n", client->name, play, lost, wait, skip, delay, (metronome.enabled ? client->metrDelay : 0),
+						client->buffer.readPos, client->buffer.writeLastPos);
+			}
+			printf("\n");
+
+			int64_t usecTot   = getBlockUsec(BLOCKS_PER_SRV_STAT);
+			int64_t usecBlock = getBlockUsec(1);
+			printf("Sound mixer load: %6.2f %% avg, %6.2f %% max\n\n",
+					(float)(usecTot - usecFreeSum)/usecTot * 100,
+					(float)(usecBlock - usecFreeMin)/usecBlock * 100);
+			usecFreeSum = 0;
+			usecFreeMin = INT64_MAX;
+		}
 
 		if (blockIndex % 50 == 0) {
 			FOR_CLIENTS(client) {
@@ -586,10 +626,10 @@ int main() {
 		}
 
 		if (blockIndex % 1000 == 0) {
-			msg("Sound mixer load: %6.2f %%", (float)(getBlockUsec(1000) - usecFreeSum)/getBlockUsec(1000) * 100);
-			usecFreeSum = 0;
 		}
+
 		__sync_synchronize();
+		usecWait = getBlockUsec(blockIndex) - getUsec(usecZero);
 		if (usecWait > 0) {
 			usleep(usecWait);
 		} else {

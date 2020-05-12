@@ -9,6 +9,7 @@
 #define bufferWriteNext sbufferWriteNext
 #define bufferOutputStats sbufferOutputStats
 #define bufferOutputStatsReset sbufferOutputStatsReset
+#define bufferSrvStatsReset sbufferSrvStatsReset
 #define BLOCK_USED SBLOCK_USED
 #define BLOCK_EMPTY SBLOCK_EMPTY
 
@@ -26,5 +27,6 @@
 #undef bufferOutputStatsReset
 #undef BLOCK_USED
 #undef BLOCK_EMPTY
+#undef bufferSrvStatsReset
 
 #undef BLOCK_SIZE

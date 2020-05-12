@@ -153,6 +153,10 @@ static void *udpReceiver(void *none) {
 	uint8_t packetsCnt = 0;
 	bool packetsReceived[256];
 
+#ifdef DEBUG_AUTORECONNECT
+reconnected:
+#endif
+
 	while ((size = recv(udpSocket, packetRaw, sizeof(union packet), 0)) > 0) {
 		switch (packetRaw[0]) {
 			case PACKET_HELO:
@@ -211,7 +215,24 @@ static void *udpReceiver(void *none) {
 	ttyClearStatus();
 	udpState = UDP_CLOSED;
 	inputMode = INPUT_DISCARD;
-	//outputMode = OUTPUT_NULL;
+
+#ifdef DEBUG_AUTORECONNECT
+	{
+		printf("\nConnection lost, reconnecting...\n");
+		Pa_Sleep(5000);
+		struct packetClientHelo packet = {
+			.type = PACKET_HELO,
+			.version = PROT_VERSION,
+			.aioLatency = aioLat,
+			.dBAdj = dBAdj
+		};
+		strcpy(packet.name, "auto");
+		send(udpSocket, (void *)&packet, (void *)strchr(packet.name, '\0') - (void *)&packet, 0);
+		goto reconnected;
+	}
+#endif
+
+
 	printf("\nConnection lost, connect again? (y/n): ");
 	fflush(stdout);
 }

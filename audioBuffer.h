@@ -25,14 +25,13 @@ struct audioBuffer {
 	bindex_t skipCondDur;
 	double statAvgSq;
 	double statMaxSq;
-	/*
-	int64_t statSumSq;
-	int64_t statMaxSq;
-	int64_t statCnt;
-	*/
 	bool statClear;
 	bool statEnabled;
 	bool fade;
+	size_t srvStatWait;
+	size_t srvStatSkip;
+	size_t srvStatLost;
+	size_t srvStatPlay;
 	bindex_t nullReads;
 	sample_t tmpBlock[BLOCK_SIZE];
 	enum {
@@ -43,23 +42,6 @@ struct audioBuffer {
 
 // fading within one block in case of discontinuity slightly reduces crackling
 float bufferFade(int index) {
-	/*
-	static float cache[BLOCK_SIZE] = {-1};
-	if (cache[0] < 0) {
-		for (int i = 0; i < BLOCK_SIZE; i++) {
-			cache[i] = 1;
-			//cache[i] = ((float)i)/BLOCK_SIZE;
-			//cache[i] = exp2(((float)i)/BLOCK_SIZE * 2 - 2);
-			//cache[i] = cos(((float)i) / BLOCK_SIZE * M_PI_2);
-			//cache[i] = 1 - sin(((float)i) / BLOCK_SIZE * M_PI_2);
-			//cache[i] = (1 - cos(((float)i) / BLOCK_SIZE * M_PI)) / 2;
-			//cache[i] = cos(((float)i) / BLOCK_SIZE * M_PI_2)/2 + ((float)i)/BLOCK_SIZE / 2;
-			//cache[i] = exp2((1 - cos(((float)i) / BLOCK_SIZE * M_PI)) / 2 * 4 - 4);
-			//cache[i] = log2(i)/log2(BLOCK_SIZE);
-		}
-	}
-	return cache[index];
-	*/
 	return ((float)index)/BLOCK_SIZE;
 }
 
@@ -69,17 +51,16 @@ void bufferClear(struct audioBuffer *buf, bindex_t readPos) {
 	buf->skipCondDur = 0;
 	buf->fade = true;
 	buf->nullReads = 0;
-	/*
-	buf->statSumSq = 0;
-	buf->statMaxSq = 0;
-	buf->statCnt = 0;
-	*/
 	buf->statAvgSq = 0;
 	buf->statMaxSq = 0;
 	buf->statClear = false;
 	for (int i = 0; i < BUFFER_BLOCKS; i++) {
 		buf->blockState[i] = BLOCK_EMPTY;
 	}
+	buf->srvStatWait = 0;
+	buf->srvStatSkip = 0;
+	buf->srvStatLost = 0;
+	buf->srvStatPlay = 0;
 }
 
 sample_t *bufferRead(struct audioBuffer *buf, bindex_t pos, bool fadeIn, bool fadeOut) {
@@ -121,6 +102,9 @@ sample_t *bufferReadNext(struct audioBuffer *buf) {
 		// writing occurred too far apart reading, this shouldn't happen
 		buf->readPos = readPos = writeLastPos - BUFFER_BLOCKS/2;
 		buf->fade = true; // no fade out before it
+#ifdef DEBUG_BUFFER_VERBOSE
+		printf("Long jump\n");
+#endif
 	}
 
 	// propose skipping part of the stream if latency is too high
@@ -134,7 +118,7 @@ sample_t *bufferReadNext(struct audioBuffer *buf) {
 			if (misses > propSkip/4) break;
 		}
 		if (i == propSkip) {
-			for (; (i < propSkip * 3) && (misses >= 0); i++) {
+			for (; (i < propSkip * 2 + 1) && (misses >= 0); i++) {
 				misses -= (buf->blockState[(readPos + i) % BUFFER_BLOCKS] == BLOCK_EMPTY);
 			}
 			if (misses < 0) {
@@ -145,30 +129,35 @@ sample_t *bufferReadNext(struct audioBuffer *buf) {
 		}
 	}
 
-	// performe proposed skipping only if the preconditions last longer time
+	// perform proposed skipping only if the preconditions last longer time
 	bool skip = false;
-	if (propSkip && (++buf->skipCondDur >= 80)) {
+	if (propSkip && (++buf->skipCondDur >= SAMPLE_RATE / MONO_BLOCK_SIZE * BUFFER_SKIP_DELAY_SEC)) {
 		skip = true;
 	} else if (!propSkip) {
 		buf->skipCondDur = 0;
 	}
 
 
-	bool curUsed = (buf->blockState[readPos % BUFFER_BLOCKS] == BLOCK_USED);
+	bool curUsed = (readPos <= buf->writeLastPos) && (buf->blockState[readPos % BUFFER_BLOCKS] == BLOCK_USED);
 
 	// check whether we are waiting too long for a packet, so it can be missed and should be skiped
 	if (!curUsed && !skip) {
-		bool prevUsed = false;
-		for (int i = 0; i < buf->nullReads/2; i++) {
-			bool curUsed = (buf->blockState[(readPos + i + 1) % BUFFER_BLOCKS] == BLOCK_USED);
-			if (curUsed) {
-				if (prevUsed) {
-					skip = true;
-					propSkip = i;
-					break;
-				}
+		bool used = false;
+		for (int i = 0; i <= buf->nullReads; i++) {
+			if (readPos + i + 1 > buf->writeLastPos) break;
+			bool nextUsed = (buf->blockState[(readPos + i + 1) % BUFFER_BLOCKS] == BLOCK_USED);
+			if (used && nextUsed) {
+				readPos += i;
+				buf->readPos = readPos;
+				curUsed = true;
+				buf->srvStatLost += i;
+				buf->nullReads -= i;
+#ifdef DEBUG_BUFFER_VERBOSE
+				printf("lost %d, readPos %d, writePos %d\n", i, readPos, buf->writeLastPos);
+#endif
+				break;
 			}
-			prevUsed = curUsed;
+			used = nextUsed;
 		}
 	}
 
@@ -184,6 +173,13 @@ sample_t *bufferReadNext(struct audioBuffer *buf) {
 
 		buf->fade = fadeOut;
 
+		buf->srvStatPlay++;
+		buf->srvStatWait += buf->nullReads;
+#ifdef DEBUG_BUFFER_VERBOSE
+		if (buf->nullReads > 0) {
+			printf("wait %d\n", buf->nullReads);
+		}
+#endif
 		buf->nullReads = 0;
 
 	} else {
@@ -192,6 +188,20 @@ sample_t *bufferReadNext(struct audioBuffer *buf) {
 		memset(buf->tmpBlock, 0, BLOCK_SIZE * sizeof(sample_t));
 		retData = buf->tmpBlock;
 		buf->nullReads++;
+
+#ifdef DEBUG_BUFFER_VERBOSE
+		if (buf->nullReads % 100 == 0) {
+			size_t readPos = buf->readPos;
+			size_t writePos = buf->writeLastPos;
+			printf("read %d, write %d\n", readPos, writePos);
+			if (readPos > 0) {
+				for (size_t i = writePos; i >= readPos; i--) {
+					printf("%d", buf->blockState[i % BUFFER_BLOCKS] == BLOCK_USED);
+				}
+				printf("\n");
+			}
+		}
+#endif
 	}
 
 	if (skip) {
@@ -200,6 +210,13 @@ sample_t *bufferReadNext(struct audioBuffer *buf) {
 		readPos = buf->readPos;
 		buf->readPos = readPos + propSkip;
 		buf->skipCondDur = 0;
+		buf->srvStatWait += buf->nullReads;
+#ifdef DEBUG_BUFFER_VERBOSE
+		printf("skip %d + wait %d, readPos %d, writePos %d\n", propSkip, buf->nullReads, buf->readPos, buf->writeLastPos);
+#endif
+		buf->nullReads = 0;
+		buf->srvStatSkip += propSkip;
+
 	}
 
 	if (buf->statEnabled) {
@@ -215,11 +232,6 @@ sample_t *bufferReadNext(struct audioBuffer *buf) {
 			buf->statClear = false;
 			buf->statAvgSq = 0;
 			buf->statMaxSq = 0;
-			/*
-			buf->statSumSq = 0;
-			buf->statMaxSq = 0;
-			buf->statCnt = 0;
-			*/
 		}
 		buf->statAvgSq = buf->statAvgSq * STAT_MULTIPLIER + (double)sum/cnt * (1 - STAT_MULTIPLIER);
 		buf->statMaxSq = (buf->statMaxSq * STAT_MULTIPLIER < max ? max : buf->statMaxSq * STAT_MULTIPLIER);
@@ -260,21 +272,9 @@ bool bufferWriteNext(struct audioBuffer *buf, sample_t *data, bool add) {
 	return bufferWrite(buf, buf->writeLastPos + 1, data, add);
 }
 
-/*
-void bufferPrintStats(struct audioBuffer *buf) { // tmp
-	bindex_t readPos = buf->readPos;
-	bindex_t writeLastPos = buf->writeLastPos;
-	int readable = 0;
-	while ((readPos + readable < writeLastPos) && (buf->blockState[(readPos + readable) % BUFFER_BLOCKS] == BLOCK_USED)) readable++;
-	printf("%3d blocks delay, %3d blocks readable, %5d read calls, %5d write calls\n", writeLastPos - readPos, readable) //, buf->totReadStat, buf->totWriteStat);
-}
-*/
-
 // --- stats (when readNext is used) ---
 
 void bufferOutputStats(struct audioBuffer *buf, float *dBAvg, float *dBPeak) {
-	// *dBAvg = 10 * log10f((float)buf->statSumSq / buf->statCnt / (1ll << (2 * sizeof(sample_t) * 8 - 2)));
-	// *dBPeak = 10 * log10f((float)buf->statMaxSq / (1ll << (2 * sizeof(sample_t) * 8 - 2)));
 	*dBAvg = 10 * log10f(buf->statAvgSq / (1ll << (2 * sizeof(sample_t) * 8 - 2)));
 	*dBPeak = 10 * log10f(buf->statMaxSq / (1ll << (2 * sizeof(sample_t) * 8 - 2)));
 }
@@ -282,6 +282,15 @@ void bufferOutputStatsReset(struct audioBuffer *buf, bool enable) {
 	buf->statClear = true;
 	buf->statEnabled = enable;
 	__sync_synchronize();
+}
+
+void bufferSrvStatsReset(struct audioBuffer *buf, size_t *play, size_t *lost, size_t *wait, size_t *skip, ssize_t *delay) {
+	__sync_synchronize();
+	*play = buf->srvStatPlay; buf->srvStatPlay = 0;
+	*lost = buf->srvStatLost; buf->srvStatLost = 0;
+	*wait = buf->srvStatWait; buf->srvStatWait = 0;
+	*skip = buf->srvStatSkip; buf->srvStatSkip = 0;
+	*delay = buf->writeLastPos - buf->readPos + 1;
 }
 
 #undef BLOCK_SIZE
