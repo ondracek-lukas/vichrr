@@ -15,3 +15,5 @@ all: client server client32.exe client64.exe
 %64.exe: %.c *.h
 	x86_64-w64-mingw32-gcc $< -o $@ -mthreads -lws2_32 $(LDFLAGS)
 
+clean:
+	rm -f client server client32.exe client64.exe
