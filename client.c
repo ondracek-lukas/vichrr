@@ -8,6 +8,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <float.h>
+#include <errno.h>
 
 #include "stereoBuffer.h"
 #include "net.h"
@@ -23,8 +24,8 @@ float aioLat = 0;
 float dBAdj = 20;
 char sHeloStr[SHELO_STR_LEN+1];
 char *serverKeys = "";
-char *serverKeysDesc;
-char *clientKeysDesc;
+char *serverKeysDesc = "";
+char *clientKeysDesc = "";
 
 
 volatile enum inputMode {
@@ -173,7 +174,7 @@ reconnected:
 				if (serverKeysDesc && (*serverKeysDesc == '\n')) {
 					*serverKeysDesc++ = '\0';
 				} else {
-					serverKeysDesc = "\0";
+					serverKeysDesc = "";
 				}
 				clientKeysDesc = "[^C]  exit";
 				printf("Connected.\n");
@@ -186,6 +187,7 @@ reconnected:
 				sbufferWrite(&outputBuffer, packet->sData.blockIndex, packet->sData.block, false);
 				break;
 			case PACKET_STATUS:
+				if (inputMode != INPUT_SEND) break;
 				packetRaw[size] = '\0';
 				if ((int)packet->sStat.statusIndex > statusIndex) {
 					statusIndex = packet->sStat.statusIndex;
@@ -215,6 +217,10 @@ reconnected:
 				break;
 		}
 	}
+	printf("\n");
+	if (size < 0) {
+		printf("Error while waiting for data: %s (%d)\n", strerror(errno), errno); // XXX
+	}
 	ttyClearStatus();
 	udpState = UDP_CLOSED;
 	inputMode = INPUT_DISCARD;
@@ -236,7 +242,7 @@ reconnected:
 #endif
 
 
-	printf("\nConnection lost or cannot be established, connect again? (y/n): ");
+	printf("Connection lost or cannot be established, connect again? (y/n): ");
 	fflush(stdout);
 	return NULL;
 }
@@ -414,7 +420,9 @@ int main() {
 				.dBAdj = dBAdj
 			};
 			strcpy(packet.name, name);
-			send(udpSocket, (void *)&packet, (void *)strchr(packet.name, '\0') - (void *)&packet, 0);
+			if (send(udpSocket, (void *)&packet, (void *)strchr(packet.name, '\0') - (void *)&packet, 0) == -1) {
+				printf("Error while sending initial packet: %s (%d)\n", strerror(errno), errno); // XXX
+			};
 		}
 
 		udpState = UDP_OPEN;
