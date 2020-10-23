@@ -13,14 +13,14 @@
 HANDLE ttyStdinHandle, ttyStdoutHandle;
 #endif
 
-int ttyInit() {
+void ttyInit() {
 #ifdef __WIN32__
 	ttyStdinHandle = GetStdHandle(STD_INPUT_HANDLE);
 	ttyStdoutHandle = GetStdHandle(STD_OUTPUT_HANDLE);
 #endif
 }
 
-int ttyMoveUp(int lines) {
+void ttyMoveUp(int lines) {
 #ifdef __WIN32__
 	CONSOLE_SCREEN_BUFFER_INFO screenInfo;
 	GetConsoleScreenBufferInfo(ttyStdoutHandle, &screenInfo);
@@ -45,9 +45,11 @@ int ttyReadKey() {
 
 	tcgetattr(STDIN_FILENO, &tty_opts_backup);
 
+	tty_opts_raw = tty_opts_backup;
 	cfmakeraw(&tty_opts_raw);
 	tty_opts_raw.c_oflag = tty_opts_backup.c_oflag;
 	//tty_opts_raw.c_lflag |= ISIG | VINTR | VQUIT | VSUSP;
+
 	tcsetattr(STDIN_FILENO, TCSANOW, &tty_opts_raw);
 #endif
 
@@ -191,22 +193,8 @@ void ttyPrintStatus() {
 }
 
 void ttyClearStatus() {
-	if (ttyStatusLines > 0) {
-		char *s = ttyStatusStr;
-		for (int l = 0; l < ttyStatusLines; l++) {
-			for (int i = 0; i < STATUS_WIDTH; i++) {
-				*s++ = ' ';
-			}
-			*s++ = '\n';
-		}
-		ttyPrintStatus();
-		ttyStatusLines = 0;
-		/*
-#ifndef __WIN32__
-	printf("\033[J\033[A\033[A\n\n");
-#endif
-*/
-	}
+	ttyStatusLines = 0;
+	ttyPrintStatus();
 }
 
 void ttyFormatSndLevel(char **s, float dBAvg, float dBPeak) {

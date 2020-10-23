@@ -79,12 +79,13 @@ static void *outputWorker(void *none) {
 			ttyPrintStatus();
 		}
 	}
+	return NULL;
 }
 
 static void *inputWorker(void *none) {
 	bindex_t blockIndex = 0;
 	enum inputMode lastMode = INPUT_END;
-	struct packetClientData packet;
+	struct packetClientData packet = {};
 	packet.type = PACKET_DATA;
 	sample_t *blockMono = packet.block;
 	sample_t blockStereo[STEREO_BLOCK_SIZE * 2];
@@ -108,6 +109,7 @@ static void *inputWorker(void *none) {
 				case INPUT_SEND:
 					packet.clientID = clientID;
 					break;
+				default: break;
 			}
 			lastMode = inputMode;
 		}
@@ -142,7 +144,7 @@ static void *inputWorker(void *none) {
 		}
 		*/
 	}
-
+	return NULL;
 }
 
 static void *udpReceiver(void *none) {
@@ -157,6 +159,7 @@ static void *udpReceiver(void *none) {
 reconnected:
 #endif
 
+	printf("Waiting for server response...\n");
 	while ((size = recv(udpSocket, packetRaw, sizeof(union packet), 0)) > 0) {
 		switch (packetRaw[0]) {
 			case PACKET_HELO:
@@ -167,14 +170,14 @@ reconnected:
 				sHeloStr[SHELO_STR_LEN]='\0';
 				serverKeys = sHeloStr;
 				serverKeysDesc = strchr(sHeloStr, '\n');
-				if (*serverKeysDesc == '\n') {
+				if (serverKeysDesc && (*serverKeysDesc == '\n')) {
 					*serverKeysDesc++ = '\0';
 				} else {
 					serverKeysDesc = "\0";
 				}
 				clientKeysDesc = "[^C]  exit";
 				printf("Connected.\n");
-				fflush(stdout);
+				// fflush(stdout);
 				__sync_synchronize();
 				inputMode = INPUT_SEND;
 				break;
@@ -218,7 +221,7 @@ reconnected:
 
 #ifdef DEBUG_AUTORECONNECT
 	{
-		printf("\nConnection lost, reconnecting...\n");
+		printf("\nConnection lost or cannot be established, reconnecting...\n");
 		Pa_Sleep(5000);
 		struct packetClientHelo packet = {
 			.type = PACKET_HELO,
@@ -233,8 +236,9 @@ reconnected:
 #endif
 
 
-	printf("\nConnection lost, connect again? (y/n): ");
+	printf("\nConnection lost or cannot be established, connect again? (y/n): ");
 	fflush(stdout);
+	return NULL;
 }
 
 int main() {
@@ -399,6 +403,7 @@ int main() {
 			char *newAddr = ttyPromptStr("Server address");
 			addr = strdup(newAddr);
 		}
+		printf("\nContacting server...\n");
 		udpSocket = netOpenConn(addr, STR(UDP_PORT));
 
 		{

@@ -84,8 +84,9 @@ int netInit() {
 		}
 	}
 #endif
+	return 0;
 }
-int netCleanup() {
+void netCleanup() {
 #ifdef __WIN32__
 	WSACleanup();
 #endif

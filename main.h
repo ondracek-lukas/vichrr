@@ -3,12 +3,12 @@
 #define _GNU_SOURCE
 
 #define PROT_VERSION              3
-#define APP_VERSION             0.4
+#define APP_VERSION             0.5
 #define UDP_PORT              64199
 #define NAME_LEN                 10
 #define MAX_CLIENTS             100
 #define BLOCKS_PER_STAT          50
-#define BLOCKS_PER_SRV_STAT    5000  // should be divisible by BLOCKS_PER_STAT
+#define BLOCKS_PER_SRV_STAT   10000  // should be divisible by BLOCKS_PER_STAT
 
 #define SAMPLE_RATE           48000
 #define MONO_BLOCK_SIZE         128  // 2.667 ms

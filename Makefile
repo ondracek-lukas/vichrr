@@ -1,7 +1,6 @@
 # Virtual Choir Rehearsal Room  Copyright (C) 2020  Lukas Ondracek <ondracek.lukas@gmail.com>, use under GNU GPLv3
 
 LDFLAGS=-lportaudio -lm -pthread
-#WLDFLAGS=-L . -l:portaudio/build-i686/lib/.libs/libportaudio.dll.a -lm -pthread
 CFLAGS=-g -std=gnu99
 
 client:

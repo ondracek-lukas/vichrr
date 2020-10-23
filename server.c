@@ -192,14 +192,15 @@ void udpRecvHelo(struct client *client, struct packetClientHelo *packet) {
 	__sync_synchronize();
 	client->connected = true;
 
-	struct packetServerHelo packetR;
+	struct packetServerHelo packetR = {};
 	packetR.clientID = client->id;
 	packetR.initBlockIndex = blockIndex;
-	strncpy(packetR.str, "durmjkhl\n" // +n
+	strncpy(packetR.str, "durmjkhlJK\n" // +n
 		"[d/u] move down/up in list\n"
 		"[r]   turn recording on/off\n"
 		"[m]   turn metronome on/off\n"
-		"[j/k] decrease/increase beats per minute\n"
+		"[j/k] decrease/increase beats per minute by 2\n"
+		"[J/K]   ... by 20\n"
 		"[h/l] decrease/increase beats per bar",
 		//"[n]   set metronome by multiple presses in rhythm and turn it on",
 		SHELO_STR_LEN);
@@ -257,13 +258,23 @@ void udpRecvKeyPress(struct client *client, struct packetKeyPress *packet) {
 			break;
 
 		case 'j': // decrease beats per minute
-			if (metronome.beatsPerMinute / 1.1 >= METR_MIN_BPM) {
-				metronome.beatsPerMinute /= 1.1;
+			if (metronome.beatsPerMinute - 2 >= METR_MIN_BPM) {
+				metronome.beatsPerMinute -= 2;
 			}
 			break;
 		case 'k': // increase beats per minute
-			if (metronome.beatsPerMinute * 1.1 <= METR_MAX_BPM) {
-				metronome.beatsPerMinute *= 1.1;
+			if (metronome.beatsPerMinute + 2 <= METR_MAX_BPM) {
+				metronome.beatsPerMinute += 2;
+			}
+			break;
+		case 'J': // big decrease beats per minute
+			if (metronome.beatsPerMinute - 20 >= METR_MIN_BPM) {
+				metronome.beatsPerMinute -= 20;
+			}
+			break;
+		case 'K': // big increase beats per minute
+			if (metronome.beatsPerMinute + 20 <= METR_MAX_BPM) {
+				metronome.beatsPerMinute += 20;
 			}
 			break;
 		case 'h': // decrease beats per bar
@@ -285,7 +296,7 @@ void *udpReceiver(void *none) {
 	char packetRaw[sizeof(union packet) + 1];
 	union packet *packet = (union packet *) &packetRaw;
 	ssize_t size;
-	struct sockaddr_storage addr;
+	struct sockaddr_storage addr = {};
 	struct client *client;
 	socklen_t addr_len = sizeof(addr);
 
