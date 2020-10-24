@@ -3,7 +3,7 @@
 #define _GNU_SOURCE
 
 #define PROT_VERSION              3
-#define APP_VERSION             0.6
+#define APP_VERSION             0.7
 #define UDP_PORT              64199
 #define NAME_LEN                 10
 #define MAX_CLIENTS             100

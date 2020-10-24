@@ -1,6 +1,7 @@
 // Virtual Choir Rehearsal Room  Copyright (C) 2020  Lukas Ondracek <ondracek.lukas@gmail.com>, use under GNU GPLv3
 // most of this file was taken from `man getaddrinfo`
 
+#include <errno.h>
 #ifdef __WIN32__
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -108,7 +109,7 @@ int netOpenPort(char *port) {
 
 	s = getaddrinfo(NULL, port, &hints, &result);
 	if (s != 0) {
-		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(s));
+		printf("getaddrinfo: %s\n", gai_strerror(s));
 		return -1;
 	}
 
@@ -132,7 +133,7 @@ int netOpenPort(char *port) {
 	 freeaddrinfo(result);           /* No longer needed */
 
 	 if (rp == NULL) {               /* No address succeeded */
-			 fprintf(stderr, "Could not bind\n");
+			 printf("Could not bind\n");
 			 return -1;
 	 }
 
@@ -154,7 +155,7 @@ int netOpenConn(char *addr, char *port) {
 
 	s = getaddrinfo(addr, port, &hints, &result);
 	if (s != 0) {
-		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(s));
+		printf("Error while resolving the address: %s\n", gai_strerror(s));
 		return -1;
 	}
 
@@ -176,7 +177,7 @@ int netOpenConn(char *addr, char *port) {
 	freeaddrinfo(result);           /* No longer needed */
 
 	if (rp == NULL) {               /* No address succeeded */
-		fprintf(stderr, "Could not connect\n");
+		printf("Error while creating socket: %s (%d)\n", strerror(errno), errno);
 		return -1;
 	}
 
@@ -188,7 +189,7 @@ int netOpenConn(char *addr, char *port) {
 	tv.tv_usec = 0;
 #endif
 	if (setsockopt(sfd, SOL_SOCKET, SO_RCVTIMEO, (void *) &tv,sizeof(tv)) < 0) {
-			perror("Error");
+			printf("Error while setting timeout of socket: %s (%d)\n", strerror(errno), errno);
 	}
 
 	return sfd;

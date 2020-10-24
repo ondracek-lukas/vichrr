@@ -178,7 +178,7 @@ reconnected:
 				}
 				clientKeysDesc = "[^C]  exit";
 				printf("Connected.\n");
-				// fflush(stdout);
+				fflush(stdout);
 				__sync_synchronize();
 				inputMode = INPUT_SEND;
 				break;
@@ -386,7 +386,6 @@ int main() {
 	sbufferOutputStatsReset(&outputBuffer, false);
 	ttyClearStatus();
 
-
 	printf("\n== 4/4 == SERVER SETTINGS =====================================================\n\n");
 	printf(
 			"Disclaimer:\n"
@@ -411,6 +410,7 @@ int main() {
 		}
 		printf("\nContacting server...\n");
 		udpSocket = netOpenConn(addr, STR(UDP_PORT));
+		if (udpSocket < 0) continue;
 
 		{
 			struct packetClientHelo packet = {
@@ -421,7 +421,7 @@ int main() {
 			};
 			strcpy(packet.name, name);
 			if (send(udpSocket, (void *)&packet, (void *)strchr(packet.name, '\0') - (void *)&packet, 0) == -1) {
-				printf("Error while sending initial packet: %s (%d)\n", strerror(errno), errno); // XXX
+				printf("Error while sending initial packet: %s (%d)\n", strerror(errno), errno);
 			};
 		}
 
