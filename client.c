@@ -58,7 +58,7 @@ static void *outputWorker(void *none) {
 		} else {
 			blockStereo = sbufferReadNext(&outputBuffer);
 		}
-		PaError err = Pa_WriteStream(paOutputStream, blockStereo, MONO_BLOCK_SIZE);
+		Pa_WriteStream(paOutputStream, blockStereo, MONO_BLOCK_SIZE);
 		if ((outputMode == OUTPUT_PASS_STAT) && (outputBuffer.readPos % 50 == 0)) {
 			float dBAvg, dBPeak;
 			sbufferOutputStats(&outputBuffer, &dBAvg, &dBPeak);
@@ -89,10 +89,10 @@ static void *inputWorker(void *none) {
 	struct packetClientData packet = {};
 	packet.type = PACKET_DATA;
 	sample_t *blockMono = packet.block;
-	sample_t blockStereo[STEREO_BLOCK_SIZE * 2];
+	sample_t blockStereo[STEREO_BLOCK_SIZE];
 
 	while (inputMode != INPUT_END) {
-		PaError err = Pa_ReadStream(paInputStream, blockStereo, MONO_BLOCK_SIZE);
+		Pa_ReadStream(paInputStream, blockStereo, MONO_BLOCK_SIZE);
 		for (size_t i = 0; i < MONO_BLOCK_SIZE; i++) {
 			blockMono[i] = blockStereo[2 * i];
 		}

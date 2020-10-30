@@ -75,7 +75,7 @@ volatile enum udpState {
 	int64_t m = s / 60; \
 	int64_t h = m / 60; \
 	ms -= 1000 * s; s -= 60 * m; m -= 60 * h; \
-	printf("[%02d:%02d:%02d.%03d] " fmt "%s\n", h, m, s, ms, __VA_ARGS__); }
+	printf("[%02d:%02d:%02d.%03d] " fmt "%s\n", (int)(h), (int)(m), (int)(s), (int)(ms), __VA_ARGS__); }
 
 struct client *getClient(size_t c) {
 	if (!clients[c] || !clients[c]->connected) return NULL;
@@ -353,6 +353,7 @@ void *udpReceiver(void *none) {
 	}
 	msg("UDP receiver error.");
 	udpState = UDP_CLOSED;
+	return NULL;
 }
 
 int64_t getBlockUsec(bindex_t index) {
@@ -473,8 +474,6 @@ int main() {
 			}
 		}
 		FOR_CLIENTS(client) {
-			int playBeat = 0; // 1 for ordinary beat, 2 for main beat
-
 			sample_t *metrBlock = NULL;
 			if (metronome.enabled && metronome.lastBeatTime) {
 				int delay = ((client->aioLatency > 0 ? client->aioLatency : 20) + client->restLatency) * SAMPLE_RATE / 1000 / MONO_BLOCK_SIZE;
@@ -586,7 +585,7 @@ int main() {
 			*s++ = '\n';
 
 			statusAppendLine(&s, NULL, false, log);
-			s += sprintf(s, "metronome:        %3s %2d beats per bar, %3.0f beats per minute\n",
+			s += sprintf(s, "metronome:        %3s %2zd beats per bar, %3.0f beats per minute\n",
 					(metronome.enabled ? "ON" : "OFF"), metronome.beatsPerBar, metronome.beatsPerMinute);
 
 			statusAppendLine(&s, NULL, false, log);
@@ -608,12 +607,12 @@ int main() {
 		usecFreeSum += usecWait;
 
 		if (blockIndex % BLOCKS_PER_SRV_STAT == 0) {
-			printf("BLOCKS      play  lost  wait  skip  delay  metr       read    write\n", "");
+			printf("BLOCKS      play  lost  wait  skip  delay  metr       read    write\n");
 			FOR_CLIENTS_ORDERED(client) {
 				size_t play, lost, wait, skip;
 				ssize_t delay;
 				bufferSrvStatsReset(&client->buffer, &play, &lost, &wait, &skip, &delay);
-				printf("%-10s %5u %5u %5u %5u %6d %5d   %8d %8d\n", client->name, play, lost, wait, skip, delay, (metronome.enabled ? client->metrDelay : 0),
+				printf("%-10s %5zu %5zu %5zu %5zu %6zd %5d   %8d %8d\n", client->name, play, lost, wait, skip, delay, (metronome.enabled ? client->metrDelay : 0),
 						client->buffer.readPos, client->buffer.writeLastPos);
 			}
 			printf("\n");
@@ -644,7 +643,7 @@ int main() {
 		if (usecWait > 0) {
 			usleep(usecWait);
 		} else {
-			msg("Sound mixer was late by %lld us...", -usecWait);
+			msg("Sound mixer was late by %ld us...", -usecWait);
 		}
 	}
 

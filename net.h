@@ -143,7 +143,7 @@ int netOpenPort(char *port) {
 int netOpenConn(char *addr, char *port) {
 	struct addrinfo hints;
 	struct addrinfo *result, *rp;
-	int sfd, s, j;
+	int sfd, s;
 
 	/* Obtain address(es) matching host/port */
 
