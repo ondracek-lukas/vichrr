@@ -110,7 +110,7 @@ The script installs:
 
 For later updates write the following line to terminal:
 
-   virtual-choir-rehearsal-room/update.sh
+    virtual-choir-rehearsal-room/update.sh
 
 
 **Linux server:**
