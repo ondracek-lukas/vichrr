@@ -1,6 +1,6 @@
 **Virtual Choir Rehearsal Room**
 is a terminal application for low-latency multiparty audio calls optimized for singing.
-Windows and Linux versions of a client application are available;
+A client application is available for Windows, Linux, and MacOS.
 Linux server with good connectivity is needed as a mixing point.
 
 Copyright © 2020  Lukáš Ondráček <<ondracek.lukas@gmail.com>>.
@@ -35,7 +35,7 @@ Requirements
 
 **Client-side:**
 
-* Linux or Windows.
+* Linux, Windows, or MacOS.
 * PortAudio library (included in Windows release).
 * Network connectivity:
 	* 1 Mbps upload, 1.7 Mbps download.
@@ -86,6 +86,31 @@ otherwise it may not work properly due to battery saving features.
 Latency of PulseAudio sound system is ~20 ms,
 you can further reduce is by bypassing it (using ALSA),
 or using JACK sound system.
+
+
+**MacOS client:**
+
+Currently no precompiled binaries are available,
+see compilation process below or use the following simplified inctructions:
+
+* Download install-mac.sh script from _[releases]_ section to your desktop.
+* Open terminal and write there the following two lines:
+    ```
+    chmod +x Desktop/install-mac.sh
+    Desktop/install-mac.sh
+    ```
+* Enter password for installing applications when prompted.
+* A link to the application should have been created on desktop.
+
+The script installs:
+* Xcode Command Line Tools including gcc, make and git,
+* HomeBrew for installing PortAudio,
+* PortAudio library,
+* the application.
+
+For later updates write the following line to terminal:
+
+   virtual-choir-rehearsal-room/update.sh
 
 
 **Linux server:**

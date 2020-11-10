@@ -19,7 +19,8 @@ enum packetType {
 	PACKET_HELO,
 	PACKET_DATA,
 	PACKET_STATUS,
-	PACKET_KEY_PRESS
+	PACKET_KEY_PRESS,
+	PACKET_NOOP
 };
 
 struct packetClientHelo {
@@ -59,7 +60,12 @@ struct packetKeyPress {
 	char type;
 	uint8_t clientID;
 	bindex_t playBlockIndex;
+	bindex_t keyPressIndex;
 	int key;
+};
+struct packetClientNoop {
+	char type;
+	uint8_t clientID;
 };
 
 union packet {

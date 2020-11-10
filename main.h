@@ -2,8 +2,8 @@
 
 #define _GNU_SOURCE
 
-#define PROT_VERSION              3
-#define APP_VERSION             0.7
+#define PROT_VERSION              4
+#define APP_VERSION             0.8
 #define UDP_PORT              64199
 #define NAME_LEN                 10
 #define MAX_CLIENTS             100
@@ -20,6 +20,8 @@
 #define STAT_HALFLIFE_MSEC      100
 #define STAT_MULTIPLIER           0.9817
 	// multiplies avg square stats every block, it's halved after ~100 ms
+#define STAT_LATENCY_MULTIPLIER   0.9637
+	// multiplies avg latency every block, it's halved after ~50 ms
 
 #define STATUS_WIDTH             79
 #define STATUS_HEIGHT           100
@@ -43,5 +45,4 @@ typedef uint32_t bindex_t;
 typedef int16_t  sample_t;
 
 // #define DEBUG_AUTORECONNECT
-// #define DEBUG_HEAR_SELF
 // #define DEBUG_BUFFER_VERBOSE

@@ -204,6 +204,11 @@ void ttyFormatSndLevel(char **s, float dBAvg, float dBPeak) {
 		*(*s)++ = dBAvg > db ? '#' : dBPeak > db ? '+' : '-';
 	}
 	*(*s)++ = ']';
-	*s += sprintf(*s, "%4.0f dB (%4.0f dB)", dBAvg, dBPeak);
-	// Lukas........100+100 ms  [########++++++------------------------] -90 dB (-90 dB)
+	if ((dBAvg > -1000) && (dBPeak > -100)) {
+		*s += sprintf(*s, "%4.0f dB (%3.0f dB)", dBAvg, dBPeak);
+	} else {
+		*s += sprintf(*s, " silent");
+	}
+
+	// [########++++++------------------------] -xx dB (-xx dB)
 }

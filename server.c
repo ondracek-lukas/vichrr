@@ -8,6 +8,7 @@
 #include <time.h>
 #include <stdlib.h>
 #include <pthread.h>
+#include <float.h>
 
 #include "metronomeRes.h"
 #include "audioBuffer.h"
@@ -23,12 +24,19 @@ struct client {
 	int64_t lastPacketUsec;
 	float aioLatency;
 	float restLatency;
-	int metrDelay;
+	float restLatencyAvg;
+	int leadingDelay;
 	float dBAdj;
+	bool muted;
+	bool mutedMic;
+	bool isLeader;
+	bindex_t lastKeyPressIndex;
 	bindex_t lastKeyPress;
 	sample_t lastReadBlock[STEREO_BLOCK_SIZE];
 	struct surroundCtx surroundCtx;
 	struct audioBuffer buffer;
+	struct packetStatusStr statusPacket;
+	char *statusPacketPos;
 	char name[NAME_LEN + 1];
 };
 struct client *clients[MAX_CLIENTS];
@@ -41,6 +49,7 @@ int64_t usecZero;
 
 struct {
 	bool enabled;
+	bool inclLeader;
 	FILE *file;
 	bindex_t startTime;
 } recording;
@@ -52,8 +61,12 @@ struct {
 	ssize_t lastBeatIndex;
 	size_t lastBeatBarIndex;
 	bindex_t lastBeatTime;
-	struct stereoBuffer buffer;
 } metronome;
+
+struct {
+	float delay;
+	struct stereoBuffer buffer;
+} leading;
 
 int64_t getUsec(int64_t zero) {
 	struct timespec tp;
@@ -180,29 +193,27 @@ ssize_t udpSendPacket(struct client *client, void *packet, size_t size) {
 }
 
 void udpRecvHelo(struct client *client, struct packetClientHelo *packet) {
-	strcpy(client->name, packet->name);
+	sprintf(client->name, "%-" STR(NAME_LEN) "s", packet->name);
+
 	bufferClear(&client->buffer, 0);
 	client->lastPacketUsec = getUsec(usecZero);
 	client->aioLatency = packet->aioLatency;
 	client->dBAdj = packet->dBAdj;
+	client->muted = false;
+	client->mutedMic = false;
 	surroundInitCtx(&client->surroundCtx, client->dBAdj, 0, 2);
 	bufferOutputStatsReset(&client->buffer, true);
 	client->lastKeyPress = 0;
-	client->metrDelay = 0;
+	client->lastKeyPressIndex = 0;
+	client->leadingDelay = 0;
+	client->restLatencyAvg = FLT_MAX;
 	__sync_synchronize();
 	client->connected = true;
 
 	struct packetServerHelo packetR = {};
 	packetR.clientID = client->id;
 	packetR.initBlockIndex = blockIndex;
-	strncpy(packetR.str, "durmjkhlJK\n" // +n
-		"[d/u] move down/up in list\n"
-		"[r]   turn recording on/off\n"
-		"[m]   turn metronome on/off\n"
-		"[j/k] decrease/increase beats per minute by 2\n"
-		"[J/K]   ... by 20\n"
-		"[h/l] decrease/increase beats per bar",
-		//"[n]   set metronome by multiple presses in rhythm and turn it on",
+	strncpy(packetR.str, "durRmjkhlJKLA-+",
 		SHELO_STR_LEN);
 
 	udpSendPacket(client, &packetR, (void *)strchr(packetR.str, '\0') - (void *)&packetR);
@@ -212,6 +223,12 @@ void udpRecvHelo(struct client *client, struct packetClientHelo *packet) {
 void udpRecvData(struct client *client, struct packetClientData *packet) {
 	client->restLatency = (float) MONO_BLOCK_SIZE / SAMPLE_RATE * 1000 *
 		((int)blockIndex - packet->playBlockIndex + packet->blockIndex - client->buffer.readPos);
+	if (client->restLatencyAvg == FLT_MAX) {
+		client->restLatencyAvg = client->restLatency;
+		client->mutedMic = false;
+	} else {
+		client->restLatencyAvg = STAT_LATENCY_MULTIPLIER * client->restLatencyAvg + (1 - STAT_LATENCY_MULTIPLIER) * client->restLatency;
+	}
 	bufferWrite(&client->buffer, packet->blockIndex, packet->block, false);
 	client->lastPacketUsec = getUsec(usecZero);
 }
@@ -226,7 +243,8 @@ void udpRecvKeyPress(struct client *client, struct packetKeyPress *packet) {
 			clientMoveDown(client);
 			break;
 
-		case 'r': // toggle recording
+		case 'r': // toggle recording incl. leader
+		case 'R': // ... excl. leader
 			if (!recording.enabled) {
 				char filename[100];
 				time_t t = time(NULL);
@@ -234,6 +252,7 @@ void udpRecvKeyPress(struct client *client, struct packetKeyPress *packet) {
 				recording.file = fopen(filename, "w");
 				if (recording.file) {
 					recording.startTime = blockIndex;
+					recording.inclLeader = (packet->key == 'r');
 					__sync_synchronize();
 					recording.enabled = true;
 				}
@@ -251,6 +270,7 @@ void udpRecvKeyPress(struct client *client, struct packetKeyPress *packet) {
 			if (metronome.enabled) {
 				metronome.enabled = false;
 			} else {
+				FOR_CLIENTS(client) client->isLeader = false;
 				metronome.lastBeatTime = 0;
 				__sync_synchronize();
 				metronome.enabled = true;
@@ -288,6 +308,26 @@ void udpRecvKeyPress(struct client *client, struct packetKeyPress *packet) {
 			}
 			break;
 		case 'n': // multiple-press metronome activation
+			break;
+		case 'A': // mute incoming audio
+			client->muted ^= 1;
+			break;
+		case '-': // decrease microphone volume
+			client->dBAdj -= 2;
+			clientsSurroundReinit();
+			break;
+		case '+': // increase microphone volume
+			client->dBAdj += 2;
+			clientsSurroundReinit();
+			break;
+		case 'L': // toggle leadership
+			if (client->isLeader) {
+				client->isLeader = false;
+			} else {
+				FOR_CLIENTS(client) client->isLeader = false;
+				client->isLeader = true;
+				metronome.enabled = false;
+			}
 			break;
 	}
 }
@@ -341,11 +381,24 @@ void *udpReceiver(void *none) {
 						(size != sizeof(struct packetKeyPress)) ||
 						!(client = getClient(packet->cKeyP.clientID)) ||
 						!netAddrsEqual(&addr, &client->addr) ||
-						(client->lastKeyPress >= packet->cKeyP.playBlockIndex)
+						(client->lastKeyPressIndex >= packet->cKeyP.keyPressIndex)
 					) break;
 				client->lastKeyPress = packet->cKeyP.playBlockIndex;
+				client->lastKeyPressIndex = packet->cKeyP.keyPressIndex;
 				msg("Key '%c' pressed by '%s'...", packet->cKeyP.key, client->name);
+				client->lastPacketUsec = getUsec(usecZero);
 				udpRecvKeyPress(client, &packet->cKeyP);
+				break;
+			case PACKET_NOOP:
+				if (
+						(size != sizeof(struct packetClientNoop)) ||
+						!(client = getClient(packet->cKeyP.clientID)) ||
+						!netAddrsEqual(&addr, &client->addr)
+					) break;
+				client->lastPacketUsec = getUsec(usecZero);
+				client->restLatency = FLT_MAX;
+				client->restLatencyAvg = FLT_MAX;
+				client->mutedMic = true;
 				break;
 		}
 		__sync_synchronize();
@@ -360,80 +413,45 @@ int64_t getBlockUsec(bindex_t index) {
 	return (int64_t)index * 1000000 * MONO_BLOCK_SIZE / SAMPLE_RATE;
 }
 
-void getStatusStr(char **s, struct client *client) {
-	if (client->aioLatency > 0) {
-		*s += sprintf(*s, " %-10s%3.0f+%-4.0fms ",
-			client->name, client->aioLatency, client->restLatency);
-	} else {
-		*s += sprintf(*s, " %-10s  ?+%-4.0fms ",
-			client->name, client->restLatency);
-	}
-	float avg, peak;
-	bufferOutputStats(&client->buffer, &avg, &peak);
-	ttyFormatSndLevel(s, avg + client->dBAdj, peak + client->dBAdj);
-	*(*s)++ = '\n';
+bool statusLog = false;
+int statusLines = -1;
+bindex_t statusIndex = 0;
+void statusAppend(struct client *client, char *s) {
+	while (*s) *client->statusPacketPos++ = *s++;
 }
-
-// init status:                  &(s=NULL), newLineClient, false
-// commit line & begin new line: &s, newLineClient, false
-// flush status:                 &s, NULL, true
-void statusAppendLine(char **s, struct client *assignedClient, bool flush, bool log) {
-	static size_t l = 0;
-	static struct packetStatusStr packet = {
-		.type = PACKET_STATUS,
-		.packetsCnt = 255,
-		.packetIndex = 0,
-		.statusIndex = 0};
-
-	static struct {
-		struct client *client;
-		char *s;
-	} lines[STATUS_LINES_PER_PACKET];
-
-	if (!*s) { // init
-		packet.packetsCnt = 255;
-		packet.packetIndex = 0;
-		l = 0;
-		*s = packet.str;
-	} else {
-		**s = '\0';
-		if (log) {
-			printf("%s", lines[l-1].s);
+void statusLineSep(bool last) {
+	if (statusLines < 0) { // init
+		statusLines = 0;
+		FOR_CLIENTS(client) {
+			client->statusPacket = (struct packetStatusStr) {
+				.type = PACKET_STATUS,
+				.packetsCnt = 255,
+				.packetIndex = 0,
+				.statusIndex = statusIndex};
+			client->statusPacketPos = client->statusPacket.str;
 		}
-		if ((l >= STATUS_LINES_PER_PACKET) || flush) { // flush
-			if (flush) {
-				packet.packetsCnt = packet.packetIndex + 1;
-			}
-
+		statusIndex++;
+	} else {
+		if (!last) {
 			FOR_CLIENTS(client) {
-				ssize_t k = -1;
-				for (size_t i = 0; i < l; i++) {
-					if (lines[i].client == client) {
-						k = i;
-						lines[i].s[0] = '.';
-						break;
-					}
-				}
-				udpSendPacket(client, &packet, (void *)*s - (void *)&packet);
-				if (k >= 0) {
-					lines[k].s[0] = ' ';
-				}
-			}
-
-			l = 0;
-			*s = packet.str;
-			packet.packetIndex++;
-			if (flush) {
-				packet.statusIndex++;
-				return;
+				statusAppend(client, "\n");
 			}
 		}
+		statusLines++;
 	}
-
-	lines[l].client = assignedClient;
-	lines[l].s = *s;
-	l++;
+	if ((statusLines >= STATUS_LINES_PER_PACKET) || last) {
+		FOR_CLIENTS(client) {
+			if (last) {
+				client->statusPacket.packetsCnt = client->statusPacket.packetIndex + 1;
+			}
+			udpSendPacket(client, &client->statusPacket, (void *)client->statusPacketPos - (void *)&client->statusPacket);
+			client->statusPacketPos = client->statusPacket.str;
+			client->statusPacket.packetIndex++;
+		}
+		statusLines = last ? -1 : 0;
+	}
 }
+
 
 #define ERR(...) {msg(__VA_ARGS__); return 1; }
 int main() {
@@ -449,6 +467,8 @@ int main() {
 	metronome.enabled = false;
 	metronome.beatsPerMinute = METR_DEFAULT_BPM;
 	metronome.beatsPerBar = METR_DEFAULT_BPB;
+
+	leading.delay = (int64_t) METR_DELAY_MSEC * SAMPLE_RATE / 1000 / MONO_BLOCK_SIZE; // TODO dynamic adjustment
 
 	usecZero = getUsec(0);
 	int64_t usecFreeSum = 0;
@@ -466,41 +486,58 @@ int main() {
 		sample_t *block = packet.block;
 		memset(mixedBlock, 0, STEREO_BLOCK_SIZE * sizeof(sample_t));
 		packet.blockIndex = blockIndex;
+		bool leadingEnabled = metronome.enabled && metronome.lastBeatTime;
 		FOR_CLIENTS(client) {
 			sample_t *clientBlock = client->lastReadBlock;
 			surroundFilter(&client->surroundCtx, bufferReadNext(&client->buffer), clientBlock);
-			for (size_t i = 0; i < STEREO_BLOCK_SIZE; i++) {
-				mixedBlock[i] += clientBlock[i];
+			if (client->isLeader) {
+				leadingEnabled = true;
+				sbufferWrite(&leading.buffer, blockIndex + leading.delay, clientBlock, true);
+			} else {
+				for (size_t i = 0; i < STEREO_BLOCK_SIZE; i++) {
+					mixedBlock[i] += clientBlock[i];
+				}
 			}
 		}
+
 		FOR_CLIENTS(client) {
-			sample_t *metrBlock = NULL;
-			if (metronome.enabled && metronome.lastBeatTime) {
-				int delay = ((client->aioLatency > 0 ? client->aioLatency : 20) + client->restLatency) * SAMPLE_RATE / 1000 / MONO_BLOCK_SIZE;
+			if (client->muted) continue;
+			sample_t *clientBlock = client->lastReadBlock;
+			sample_t *leadingBlock = NULL;
+			if (leadingEnabled) {
+				int delay;
+				if (client->restLatencyAvg != FLT_MAX) {
+					delay = ((client->aioLatency > 0 ? client->aioLatency : 20) + client->restLatencyAvg) * SAMPLE_RATE / 1000 / MONO_BLOCK_SIZE;
+				} else {
+					delay = 0;
+				}
 				bool fadeIn = false, fadeOut = false;
-				if (client->metrDelay == 0) {
-					client->metrDelay = delay;
+				if (client->leadingDelay < 0) {
+					client->leadingDelay = delay;
 					fadeIn = true;
 				} else {
-					if ((float)abs(client->metrDelay - delay) * MONO_BLOCK_SIZE / SAMPLE_RATE * 1000 > 5) {
+					if ((float)abs(client->leadingDelay - delay) * MONO_BLOCK_SIZE / SAMPLE_RATE * 1000 > 5) {
 						fadeOut = true;
-						delay = client->metrDelay;
-						client->metrDelay = 0;
+						delay = client->leadingDelay;
+						client->leadingDelay = -1;
 					} else {
-						delay = client->metrDelay;
+						delay = client->leadingDelay;
 					}
 				}
-				metrBlock = sbufferRead(&metronome.buffer, blockIndex + delay, fadeIn, fadeOut);
+				leadingBlock = sbufferRead(&leading.buffer, blockIndex + delay, fadeIn, fadeOut);
+
+				if (client->isLeader) {
+					for (size_t i = 0; i < STEREO_BLOCK_SIZE; i++)
+						block[i] = mixedBlock[i];
+				} else {
+					for (size_t i = 0; i < STEREO_BLOCK_SIZE; i++)
+						block[i] = mixedBlock[i] - clientBlock[i] + leadingBlock[i];
+				}
+			} else {
+				for (size_t i = 0; i < STEREO_BLOCK_SIZE; i++)
+					block[i] = mixedBlock[i] - clientBlock[i];
 			}
 
-			sample_t *clientBlock = client->lastReadBlock;
-			for (size_t i = 0; i < STEREO_BLOCK_SIZE; i++) {
-#ifdef DEBUG_HEAR_SELF
-				block[i] = mixedBlock[i] + (metrBlock ? metrBlock[i] : 0);
-#else
-				block[i] = mixedBlock[i] - clientBlock[i] + (metrBlock ? metrBlock[i] : 0);
-#endif
-			}
 			ssize_t err = udpSendPacket(client, &packet, sizeof(struct packetServerData));
 			// ssize_t err = sendto(udpSocket, &packet, sizeof(struct packetServerData), 0,
 			// 	(struct sockaddr *)&clients[c]->addr, sizeof(struct sockaddr_storage));
@@ -511,6 +548,11 @@ int main() {
 		}
 
 		if (recording.enabled) {
+			if (leadingEnabled && recording.inclLeader) {
+				sample_t *leadingBlock = sbufferRead(&leading.buffer, blockIndex, false, false);
+				for (size_t i = 0; i < STEREO_BLOCK_SIZE; i++)
+					mixedBlock[i] += leadingBlock[i];
+			}
 			fwrite(mixedBlock, sizeof(mixedBlock), 1, recording.file);
 		}
 
@@ -519,17 +561,17 @@ int main() {
 		if (metronome.enabled) {
 			bindex_t nextBeatTime;
 			if (metronome.lastBeatTime == 0) {
-				nextBeatTime = blockIndex + ((uint32_t) METR_DELAY_MSEC * SAMPLE_RATE / 1000 / MONO_BLOCK_SIZE);
+				nextBeatTime = blockIndex + leading.delay;
 				metronome.lastBeatIndex = -1;
 				metronome.lastBeatBarIndex = -1;
-				sbufferClear(&metronome.buffer, 0);
+				sbufferClear(&leading.buffer, 0);
 				FOR_CLIENTS(client) {
-					client->metrDelay = 0;
+					client->leadingDelay = -1; // XXX same for leader?
 				}
 			} else {
 				nextBeatTime = metronome.lastBeatTime + (float)SAMPLE_RATE / MONO_BLOCK_SIZE / metronome.beatsPerMinute * 60;
 			}
-			if (nextBeatTime <= blockIndex + ((uint32_t) METR_DELAY_MSEC * SAMPLE_RATE / 1000 / MONO_BLOCK_SIZE)) {
+			if (nextBeatTime <= blockIndex + leading.delay) {
 				metronome.lastBeatIndex++;
 				bool mainBeat = false;
 				if (metronome.beatsPerBar) {
@@ -551,14 +593,14 @@ int main() {
 				while (i < beatSize) {
 					mixedBlock[i % STEREO_BLOCK_SIZE] = beat[i];
 					if (++i % STEREO_BLOCK_SIZE == 0) {
-						sbufferWrite(&metronome.buffer, nextBeatTime++, mixedBlock, true);
+						sbufferWrite(&leading.buffer, nextBeatTime++, mixedBlock, true);
 					}
 				}
 				if (i % STEREO_BLOCK_SIZE) {
 					for (; i % STEREO_BLOCK_SIZE; i++) {
 						mixedBlock[i % STEREO_BLOCK_SIZE] = 0;
 					}
-					sbufferWrite(&metronome.buffer, nextBeatTime++, mixedBlock, true);
+					sbufferWrite(&leading.buffer, nextBeatTime++, mixedBlock, true);
 				}
 			}
 		}
@@ -566,38 +608,113 @@ int main() {
 
 		// status string [
 		if (blockIndex % BLOCKS_PER_STAT == 0) {
-			const bool log = blockIndex % BLOCKS_PER_SRV_STAT == 0;
-			if (log) msg("\n");
+			char str[80];
+			statusLog = blockIndex % BLOCKS_PER_SRV_STAT == 0;
+			if (statusLog) msg("\n");
 
-			char *s = NULL;
-			statusAppendLine(&s, NULL, false, log);
-			s += sprintf(s, "---------------------  left\n");
+#define LN        statusLineSep(false); FOR_CLIENTS(C)
+#define TXT(STR)  statusAppend(C, STR)
+
+			LN TXT("---------------------  left");
 
 			FOR_CLIENTS_ORDERED(client) {
-				statusAppendLine(&s, client, false, log);
-				getStatusStr(&s, client);
+				char *s = str;
+				s += sprintf(s, "%-10s", client->name);
+				if (client->aioLatency > 0) {
+					s += sprintf(s, "%3.0f+", client->aioLatency);
+				} else {
+					s += sprintf(s, "  ?+");
+				}
+				if ((client->restLatencyAvg < 10000) && !client->muted) {
+					s += sprintf(s, "%-4.0fms ", client->restLatencyAvg);
+				} else {
+					s += sprintf(s, "?   ms ");
+				}
+				*s++ = client->isLeader ? 'L' : ' ';
+
+				float avg, peak;
+				bufferOutputStats(&client->buffer, &avg, &peak);
+				ttyFormatSndLevel(&s, avg + client->dBAdj, peak + client->dBAdj);
+
+				LN {
+					TXT(C == client ? "." : " ");
+					TXT(str);
+				}
 			}
 
-			statusAppendLine(&s, NULL, false, log);
-			s += sprintf(s, "---------------------  right\n");
+			LN TXT("---------------------  right");
+			LN TXT("");
+			LN TXT("[d/u] move down/up in list");
+			LN TXT("[+/-] decrease/increase microphone volume by 2 dB");
 
-			statusAppendLine(&s, NULL, false, log);
-			*s++ = '\n';
+			LN {
+				TXT("[M]   ");
+				TXT(!C->mutedMic ? "mute microphone  " : "unmute microphone");
+				TXT("   [A] ");
+				TXT(!C->muted ? "mute incoming audio" : "unmute incoming audio");
+			}
 
-			statusAppendLine(&s, NULL, false, log);
-			s += sprintf(s, "metronome:        %3s %2zd beats per bar, %3.0f beats per minute\n",
-					(metronome.enabled ? "ON" : "OFF"), metronome.beatsPerBar, metronome.beatsPerMinute);
+			LN;
+			{ // leading track
+				char *leadingTrackName = NULL;
+				if (metronome.enabled) {
+					leadingTrackName = "metronome ";
+				} else {
+					FOR_CLIENTS(client) {
+						if (client->isLeader) leadingTrackName = client->name;
+					}
+				}
+				char delayStr[6];
+				snprintf(delayStr, 6, "%4d", (uint64_t)leading.delay * MONO_BLOCK_SIZE * 1000 / SAMPLE_RATE);
+				LN {
+					TXT("Leading track:  ");
+					if (leadingTrackName) {
+						TXT(C->isLeader ? "you       " : leadingTrackName);
+						TXT(delayStr);
+						TXT(" ms");
+					} else {
+						TXT("-                ");
+					}
+					TXT("     [L] ");
+					TXT(C->isLeader ? "cease leadership" : "become leader   ");
+					TXT("  [m] ");
+					TXT(metronome.enabled ? "stop metronome" : "start metronome");
+				}
+			}
 
-			statusAppendLine(&s, NULL, false, log);
+			LN;
+			sprintf(str, "%3d", metronome.beatsPerBar);
+			LN {
+				TXT("Metronome:     ");
+				TXT(str);
+				TXT(" beats per bar      [h/l] -/+ 1");
+			}
+
+			sprintf(str, "%3.0f", metronome.beatsPerMinute);
+			LN {
+				TXT("               ");
+				TXT(str);
+				TXT(" beats per minute   [j/k] -/+ 2    [J/K] -/+ 20");
+			}
+
+
+			LN;
 			if (recording.enabled) {
 				float durSec = (blockIndex - recording.startTime) * MONO_BLOCK_SIZE / SAMPLE_RATE;
-				s += sprintf(s, "recording:         ON  %02d:%02d\n", (int)durSec / 60, (int)durSec % 60);
+				sprintf(str, "%02d:%02d  %s. leader    [r/R] stop", (int)durSec / 60, (int)durSec % 60, recording.inclLeader ? "incl" : "excl");
 			} else {
-				s += sprintf(s, "recording:        OFF\n");
+				sprintf(str, "%19s    [r/R] start incl./excl. leading track", "");
+			}
+			LN {
+				TXT("Recording:     ");
+				TXT(str);
 			}
 
-			statusAppendLine(&s, NULL, true, log);
-			if (log) printf("\n");
+#undef TXT
+#undef LN
+
+			statusLineSep(true);
+			if (statusLog) printf("\n");
 		}
 		// ] end of status string
 
@@ -607,12 +724,12 @@ int main() {
 		usecFreeSum += usecWait;
 
 		if (blockIndex % BLOCKS_PER_SRV_STAT == 0) {
-			printf("BLOCKS      play  lost  wait  skip  delay  metr       read    write\n");
+			printf("BLOCKS      play  lost  wait  skip  delay  lead       read    write\n");
 			FOR_CLIENTS_ORDERED(client) {
 				size_t play, lost, wait, skip;
 				ssize_t delay;
 				bufferSrvStatsReset(&client->buffer, &play, &lost, &wait, &skip, &delay);
-				printf("%-10s %5zu %5zu %5zu %5zu %6zd %5d   %8d %8d\n", client->name, play, lost, wait, skip, delay, (metronome.enabled ? client->metrDelay : 0),
+				printf("%-10s %5zu %5zu %5zu %5zu %6zd %5d   %8d %8d\n", client->name, play, lost, wait, skip, delay, (leadingEnabled ? client->leadingDelay : 0),
 						client->buffer.readPos, client->buffer.writeLastPos);
 			}
 			printf("\n");

@@ -33,7 +33,8 @@ bool aioConnectAudio(PaStream **paInputStream, PaStream **paOutputStream) {
 		struct {} wasapiInfo;
 #endif
 
-	if (ttyPromptKey("Use default sound settings? (y/n)", "yn") != 'n') {
+	printf("[space] default settings    [c] custom settings\n");
+	if (ttyReadKey() != 'c') {
 		inputIndex = Pa_GetDefaultInputDevice();
 		outputIndex = Pa_GetDefaultOutputDevice();
 		inputSuggLat = 0;
