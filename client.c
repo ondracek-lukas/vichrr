@@ -61,7 +61,7 @@ static void *outputWorker(void *none) {
 			blockStereo = sbufferReadNext(&outputBuffer);
 		}
 		Pa_WriteStream(paOutputStream, blockStereo, MONO_BLOCK_SIZE);
-		if ((outputMode == OUTPUT_PASS_STAT) && (outputBuffer.readPos % 50 == 0)) {
+		if ((outputMode == OUTPUT_PASS_STAT) && (outputBuffer.readPos % BLOCKS_PER_STAT == 0)) {
 			float dBAvg, dBPeak;
 			sbufferOutputStats(&outputBuffer, &dBAvg, &dBPeak);
 			if (dBAvg + dBAdj > -20) {

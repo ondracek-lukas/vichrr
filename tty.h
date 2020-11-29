@@ -17,11 +17,16 @@ void ttyInit() {
 #ifdef __WIN32__
 	ttyStdinHandle = GetStdHandle(STD_INPUT_HANDLE);
 	ttyStdoutHandle = GetStdHandle(STD_OUTPUT_HANDLE);
+	CONSOLE_CURSOR_INFO info;
+	info.dwSize = 100;
+	info.bVisible = FALSE;
+	SetConsoleCursorInfo(ttyStdoutHandle, &info);
 #endif
 }
 
 void ttyMoveUp(int lines) {
 #ifdef __WIN32__
+	fflush(stdout);
 	CONSOLE_SCREEN_BUFFER_INFO screenInfo;
 	GetConsoleScreenBufferInfo(ttyStdoutHandle, &screenInfo);
 	screenInfo.dwCursorPosition.Y -= lines;
@@ -187,8 +192,8 @@ void ttyPrintStatus() {
 		}
 		ttyPrevStatusLines = tmp;
 	}
-	ttyStatusStr[ttyStatusLines * (STATUS_WIDTH + 1)] = '\0';
-	printf("%s", ttyStatusStr);
+	ttyStatusStr[ttyStatusLines * (STATUS_WIDTH + 1) - 1] = '\0';
+	puts(ttyStatusStr);
 	ttyMoveUp(ttyStatusLines);
 }
 

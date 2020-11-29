@@ -3,7 +3,7 @@
 #define _GNU_SOURCE
 
 #define PROT_VERSION              4
-#define APP_VERSION             0.8
+#define APP_VERSION             0.9
 #define UDP_PORT              64199
 #define NAME_LEN                 10
 #define MAX_CLIENTS             100
@@ -12,7 +12,7 @@
 
 #define SAMPLE_RATE           48000
 #define MONO_BLOCK_SIZE         128  // 2.667 ms
-#define BUFFER_BLOCKS           512
+#define BUFFER_BLOCKS          4096  // 10.92 s, ~1 MB mono, ~2 MB stereo
 #define STEREO_BLOCK_SIZE (2 * MONO_BLOCK_SIZE)
 #define BUFFER_SKIP_DELAY_SEC     2  // latency is lowered only if possible for this duration
 

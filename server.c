@@ -64,7 +64,9 @@ struct {
 } metronome;
 
 struct {
-	float delay;
+	int delay;
+	int newDelay;
+	bool fadeIn;
 	struct stereoBuffer buffer;
 } leading;
 
@@ -413,7 +415,7 @@ int64_t getBlockUsec(bindex_t index) {
 	return (int64_t)index * 1000000 * MONO_BLOCK_SIZE / SAMPLE_RATE;
 }
 
-bool statusLog = false;
+bool statusLog = false; // FIXME not used -- update macros below
 int statusLines = -1;
 bindex_t statusIndex = 0;
 void statusAppend(struct client *client, char *s) {
@@ -468,7 +470,8 @@ int main() {
 	metronome.beatsPerMinute = METR_DEFAULT_BPM;
 	metronome.beatsPerBar = METR_DEFAULT_BPB;
 
-	leading.delay = (int64_t) METR_DELAY_MSEC * SAMPLE_RATE / 1000 / MONO_BLOCK_SIZE; // TODO dynamic adjustment
+	leading.delay = 0;
+	// leading.delay = (int64_t) METR_DELAY_MSEC * SAMPLE_RATE / 1000 / MONO_BLOCK_SIZE; // TODO dynamic adjustment
 
 	usecZero = getUsec(0);
 	int64_t usecFreeSum = 0;
@@ -492,7 +495,12 @@ int main() {
 			surroundFilter(&client->surroundCtx, bufferReadNext(&client->buffer), clientBlock);
 			if (client->isLeader) {
 				leadingEnabled = true;
-				sbufferWrite(&leading.buffer, blockIndex + leading.delay, clientBlock, true);
+				bool delayChange = leading.delay != leading.newDelay;
+				sbufferWrite(&leading.buffer, blockIndex + leading.delay, clientBlock, true); // leading.fadeIn, delayChange XXX
+				if (delayChange) {
+					leading.delay = leading.newDelay;
+					leading.fadeIn = true;
+				}
 			} else {
 				for (size_t i = 0; i < STEREO_BLOCK_SIZE; i++) {
 					mixedBlock[i] += clientBlock[i];
@@ -500,17 +508,19 @@ int main() {
 			}
 		}
 
+		int maxClientLeadingDelay = 0;
 		FOR_CLIENTS(client) {
 			if (client->muted) continue;
 			sample_t *clientBlock = client->lastReadBlock;
 			sample_t *leadingBlock = NULL;
-			if (leadingEnabled) {
+			if (leadingEnabled && !client->isLeader) {
 				int delay;
 				if (client->restLatencyAvg != FLT_MAX) {
 					delay = ((client->aioLatency > 0 ? client->aioLatency : 20) + client->restLatencyAvg) * SAMPLE_RATE / 1000 / MONO_BLOCK_SIZE;
 				} else {
 					delay = 0;
 				}
+				if (maxClientLeadingDelay < delay) maxClientLeadingDelay = delay;
 				bool fadeIn = false, fadeOut = false;
 				if (client->leadingDelay < 0) {
 					client->leadingDelay = delay;
@@ -526,13 +536,12 @@ int main() {
 				}
 				leadingBlock = sbufferRead(&leading.buffer, blockIndex + delay, fadeIn, fadeOut);
 
-				if (client->isLeader) {
-					for (size_t i = 0; i < STEREO_BLOCK_SIZE; i++)
-						block[i] = mixedBlock[i];
-				} else {
-					for (size_t i = 0; i < STEREO_BLOCK_SIZE; i++)
-						block[i] = mixedBlock[i] - clientBlock[i] + leadingBlock[i];
-				}
+				for (size_t i = 0; i < STEREO_BLOCK_SIZE; i++)
+					block[i] = mixedBlock[i] - clientBlock[i] + leadingBlock[i];
+
+			} else if (client->isLeader) {
+				for (size_t i = 0; i < STEREO_BLOCK_SIZE; i++)
+					block[i] = mixedBlock[i];
 			} else {
 				for (size_t i = 0; i < STEREO_BLOCK_SIZE; i++)
 					block[i] = mixedBlock[i] - clientBlock[i];
@@ -556,9 +565,19 @@ int main() {
 			fwrite(mixedBlock, sizeof(mixedBlock), 1, recording.file);
 		}
 
+		if (leadingEnabled) {
+			if (leading.delay < maxClientLeadingDelay) {
+				leading.newDelay = maxClientLeadingDelay + 10 * SAMPLE_RATE / MONO_BLOCK_SIZE / 1000 + 1;
+			}
+		} else {
+			leading.delay = 0;
+			leading.newDelay = 0;
+		}
+
 		// ] end of sound mixing
 
 		if (metronome.enabled) {
+			leading.delay = leading.newDelay;
 			bindex_t nextBeatTime;
 			if (metronome.lastBeatTime == 0) {
 				nextBeatTime = blockIndex + leading.delay;
@@ -608,8 +627,8 @@ int main() {
 
 		// status string [
 		if (blockIndex % BLOCKS_PER_STAT == 0) {
-			char str[80];
-			statusLog = blockIndex % BLOCKS_PER_SRV_STAT == 0;
+			char str[80]; // temporary string, at most one line
+			statusLog = blockIndex % BLOCKS_PER_SRV_STAT == 0; // FIXME not used, update TXT and LN macros
 			if (statusLog) msg("\n");
 
 #define LN        statusLineSep(false); FOR_CLIENTS(C)
@@ -636,11 +655,23 @@ int main() {
 				bufferOutputStats(&client->buffer, &avg, &peak);
 				ttyFormatSndLevel(&s, avg + client->dBAdj, peak + client->dBAdj);
 
+				if (statusLog) {
+					printf("%s\n", str);
+				}
+
 				LN {
 					TXT(C == client ? "." : " ");
 					TXT(str);
 				}
 			}
+			if (statusLog) { printf("\n"); }
+
+
+			/*
+			for (int i = 0; i < 15; i++) {
+				LN TXT("fake user");
+			}
+			*/
 
 			LN TXT("---------------------  right");
 			LN TXT("");
@@ -665,7 +696,7 @@ int main() {
 					}
 				}
 				char delayStr[6];
-				snprintf(delayStr, 6, "%4d", (uint64_t)leading.delay * MONO_BLOCK_SIZE * 1000 / SAMPLE_RATE);
+				snprintf(delayStr, 6, "%4lu", (uint64_t)leading.delay * MONO_BLOCK_SIZE * 1000 / SAMPLE_RATE);
 				LN {
 					TXT("Leading track:  ");
 					if (leadingTrackName) {
@@ -683,7 +714,7 @@ int main() {
 			}
 
 			LN;
-			sprintf(str, "%3d", metronome.beatsPerBar);
+			sprintf(str, "%3lu", metronome.beatsPerBar);
 			LN {
 				TXT("Metronome:     ");
 				TXT(str);
