@@ -187,6 +187,22 @@ int netOpenConn(char *addr, char *port) {
 		return -1;
 	}
 
+	{
+		uint32_t val;
+		socklen_t valsize = sizeof(val);
+		getsockopt(sfd, SOL_SOCKET, SO_SNDBUF, (char *)&val, &valsize);
+		if (val < CLIENT_SOCK_BUF_SIZE) {
+			val = CLIENT_SOCK_BUF_SIZE;
+			setsockopt(sfd, SOL_SOCKET, SO_SNDBUF, (char *)&val, sizeof(val));
+		}
+		valsize = sizeof(val);
+		getsockopt(sfd, SOL_SOCKET, SO_RCVBUF, (char *)&val, &valsize);
+		if (val < CLIENT_SOCK_BUF_SIZE) {
+			val = CLIENT_SOCK_BUF_SIZE;
+			setsockopt(sfd, SOL_SOCKET, SO_RCVBUF, (char *)&val, sizeof(val));
+		}
+	}
+
 #ifdef __WIN32__
 	DWORD tv = 1000;
 #else
