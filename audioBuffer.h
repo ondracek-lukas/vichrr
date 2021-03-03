@@ -242,7 +242,7 @@ sample_t *bufferReadNext(struct audioBuffer *buf) {
 }
 
 				// tmpData[i] = retData[i] * bufferFade(i); XXX
-bool bufferWrite(struct audioBuffer *buf, bindex_t pos, sample_t *data, bool add) { // TODO fadeIn, fadeOut
+bool bufferWrite(struct audioBuffer *buf, bindex_t pos, const sample_t *data, bool add) { // TODO fadeIn, fadeOut
 	if (buf->writeLastPos < pos) {
 		do {
 			buf->blockState[++buf->writeLastPos % BUFFER_BLOCKS] = BLOCK_EMPTY;
@@ -269,7 +269,7 @@ bool bufferWrite(struct audioBuffer *buf, bindex_t pos, sample_t *data, bool add
 	return true;
 }
 
-bool bufferWriteNext(struct audioBuffer *buf, sample_t *data, bool add) {
+bool bufferWriteNext(struct audioBuffer *buf, const sample_t *data, bool add) {
 	return bufferWrite(buf, buf->writeLastPos + 1, data, add);
 }
 

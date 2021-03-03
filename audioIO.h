@@ -10,7 +10,7 @@
 #include <pa_win_wasapi.h>
 #endif
 
-bool aioConnectAudio(PaStream **paInputStream, PaStream **paOutputStream) {
+bool aioConnectAudio(PaStream **paInputStream, PaStream **paOutputStream, bool forceDefault, PaStreamCallback *inputCallback, PaStreamCallback *outputCallback) {
 	PaError err;
 
 
@@ -23,7 +23,7 @@ bool aioConnectAudio(PaStream **paInputStream, PaStream **paOutputStream) {
 			.size = sizeof(PaWasapiStreamInfo),
 			.hostApiType = paWASAPI,
 			.version = 1,
-			.flags = paWinWasapiExclusive | paWinWasapiThreadPriority,
+			.flags = paWinWasapiExclusive | paWinWasapiThreadPriority | paWinWasapiExplicitSampleFormat | paWinWasapiPolling,
 			.channelMask = 0,
 			.hostProcessorOutput = NULL,
 			.hostProcessorInput = NULL,
@@ -33,8 +33,8 @@ bool aioConnectAudio(PaStream **paInputStream, PaStream **paOutputStream) {
 		struct {} wasapiInfo;
 #endif
 
-	printf("[space] default settings    [c] custom settings\n");
-	if (ttyReadKey() != 'c') {
+	if (!forceDefault) printf("[space] default settings    [c] custom settings\n");
+	if (forceDefault || (ttyReadKey() != 'c')) {
 		inputIndex = Pa_GetDefaultInputDevice();
 		outputIndex = Pa_GetDefaultOutputDevice();
 		inputSuggLat = 0;
@@ -105,19 +105,17 @@ bool aioConnectAudio(PaStream **paInputStream, PaStream **paOutputStream) {
 
 	}
 
-
-
 	const PaStreamParameters inputParameters = {
 		.device = inputIndex,
 		.channelCount = 2,
 		.sampleFormat = paInt16,
-		.suggestedLatency =  inputSuggLat/1000,
+		.suggestedLatency =  0,
 		.hostApiSpecificStreamInfo = (useWasapiExclusive ? &wasapiInfo : NULL)};
 
 	err = Pa_OpenStream( paInputStream,
 			&inputParameters, NULL,
 			SAMPLE_RATE, MONO_BLOCK_SIZE, paNoFlag,
-			NULL, NULL);
+			inputCallback, NULL);
 
 	if (err != paNoError) {
 		printf("%s\n", Pa_GetErrorText(err));
@@ -128,13 +126,13 @@ bool aioConnectAudio(PaStream **paInputStream, PaStream **paOutputStream) {
 		.device = outputIndex,
 		.channelCount = 2,
 		.sampleFormat = paInt16,
-		.suggestedLatency =  outputSuggLat/1000,
+		.suggestedLatency =  0,
 		.hostApiSpecificStreamInfo = (useWasapiExclusive ? &wasapiInfo : NULL)};
 
 	err = Pa_OpenStream( paOutputStream,
 			NULL, &outputParameters,
 			SAMPLE_RATE, MONO_BLOCK_SIZE, paNoFlag,
-			NULL, NULL);
+			outputCallback, NULL);
 
 	if (err != paNoError) {
 		printf("%s\n", Pa_GetErrorText(err));
@@ -146,18 +144,6 @@ bool aioConnectAudio(PaStream **paInputStream, PaStream **paOutputStream) {
 	Pa_StartStream(*paInputStream);
 
 
-	/*
-	{
-		const PaStreamInfo *inputStreamInfo = Pa_GetStreamInfo(*paInputStream);
-		const PaStreamInfo *outputStreamInfo = Pa_GetStreamInfo(*paOutputStream);
-
-		printf("\ninput latency: %f ms\noutput latency: %f ms\ninput sample rate: %f\noutput sample rate: %f\n\n",
-			inputStreamInfo->inputLatency * 1000,
-			outputStreamInfo->outputLatency * 1000,
-			inputStreamInfo->sampleRate,
-			outputStreamInfo->sampleRate);
-	}
-	*/
 	return true;
 }
 

@@ -18,7 +18,7 @@
 struct stereoBuffer outputBuffer;
 PaStream *paInputStream = NULL, *paOutputStream = NULL;
 int udpSocket = -1;
-pthread_t inputThread, outputThread, udpThread;
+pthread_t udpThread;
 uint8_t clientID;
 float aioLat = 0;
 float dBAdj = 20;
@@ -51,106 +51,115 @@ volatile enum udpState {
 	UDP_CLOSED
 } udpState;
 
-static void *outputWorker(void *none) {
-	while (outputMode != OUTPUT_END) {
-		__sync_synchronize();
-		sample_t *blockStereo = NULL;
-		if (outputMode == OUTPUT_NULL) {
-			blockStereo = sbufferRead(&outputBuffer, 0, true, true);
-		} else {
-			blockStereo = sbufferReadNext(&outputBuffer);
-		}
-		Pa_WriteStream(paOutputStream, blockStereo, MONO_BLOCK_SIZE);
-		if ((outputMode == OUTPUT_PASS_STAT) && (outputBuffer.readPos % BLOCKS_PER_STAT == 0)) {
-			float dBAvg, dBPeak;
-			sbufferOutputStats(&outputBuffer, &dBAvg, &dBPeak);
-			if (dBAvg + dBAdj > -20) {
-				dBAdj = -20 - dBAvg;
-			}
 
-			char str[200];
-			char *s = str;
-
-			s += sprintf(s, "%-22s ", "system level:");
-			ttyFormatSndLevel(&s, dBAvg, dBPeak);
-			*s++ = '\n';
-			s += sprintf(s, "%-22s ", "adjusted level:");
-			ttyFormatSndLevel(&s, dBAvg + dBAdj, dBPeak + dBAdj);
-
-			ttyResetStatus();
-			ttyUpdateStatus(str, 0);
-			ttyPrintStatus();
-		}
+int outputCallback(const sample_t *input, sample_t *output, unsigned long frameCount, PaStreamCallbackTimeInfo *timeinfo, PaStreamCallbackFlags statusFlags, void *userData) {
+	sample_t *blockStereo;
+	__sync_synchronize();
+	if (frameCount != MONO_BLOCK_SIZE) {
+		printf("Error: Wrong output frameCount %d\n", frameCount);
+		exit(1);
 	}
-	return NULL;
+	if ((outputMode == OUTPUT_NULL) || (outputMode == OUTPUT_END)) {
+		blockStereo = sbufferRead(&outputBuffer, 0, true, true);
+	} else {
+		blockStereo = sbufferReadNext(&outputBuffer);
+	}
+	memcpy(output, blockStereo, STEREO_BLOCK_SIZE * sizeof(sample_t));
+
+	// Pa_WriteStream(paOutputStream, blockStereo, MONO_BLOCK_SIZE);
+	if ((outputMode == OUTPUT_PASS_STAT) && (outputBuffer.readPos % BLOCKS_PER_STAT == 0)) {
+		float dBAvg, dBPeak;
+		sbufferOutputStats(&outputBuffer, &dBAvg, &dBPeak);
+		if (dBAvg + dBAdj > -20) {
+			dBAdj = -20 - dBAvg;
+		}
+
+		char str[200];
+		char *s = str;
+
+		s += sprintf(s, "%-22s ", "system level:");
+		ttyFormatSndLevel(&s, dBAvg, dBPeak);
+		*s++ = '\n';
+		s += sprintf(s, "%-22s ", "adjusted level:");
+		ttyFormatSndLevel(&s, dBAvg + dBAdj, dBPeak + dBAdj);
+
+		ttyResetStatus();
+		ttyUpdateStatus(str, 0);
+		ttyPrintStatus();
+	}
+	return outputMode == OUTPUT_END ? paComplete : paContinue;
 }
 
-static void *inputWorker(void *none) {
-	bindex_t blockIndex = 0;
-	enum inputMode lastMode = INPUT_END;
-	struct packetClientData packet = {};
+int inputCallback(const sample_t *blockStereo, const sample_t *output, unsigned long frameCount, PaStreamCallbackTimeInfo *timeinfo, PaStreamCallbackFlags statusFlags, void *userData) {
+	static bindex_t blockIndex = 0;
+	static enum inputMode lastMode = INPUT_END;
+	static struct packetClientData packet = {};
 	packet.type = PACKET_DATA;
 	sample_t *blockMono = packet.block;
-	sample_t blockStereo[STEREO_BLOCK_SIZE];
 
-	while (inputMode != INPUT_END) {
-		Pa_ReadStream(paInputStream, blockStereo, MONO_BLOCK_SIZE);
-		for (size_t i = 0; i < MONO_BLOCK_SIZE; i++) {
-			blockMono[i] = blockStereo[2 * i];
-		}
-		if (inputMode != lastMode) {
-			__sync_synchronize();
-			switch (inputMode) {
-				case INPUT_TO_OUTPUT:
-					//sbufferClear(&outputBuffer, 0);
-					break;
-				case INPUT_MEASURE_LATENCY:
-					//sbufferClear(&outputBuffer, 0);
-					aioLatReset();
-					break;
-				case INPUT_SEND:
-					if (lastMode != INPUT_SEND_MUTE) {
-						blockIndex = 0;
-						packet.clientID = clientID;
-					}
-					break;
-				default: break;
-			}
-			lastMode = inputMode;
-		}
+	if (frameCount != MONO_BLOCK_SIZE) {
+		printf("Error: Wrong input frameCount %d\n", frameCount);
+		exit(1);
+	}
+
+	// Pa_ReadStream(paInputStream, blockStereo, MONO_BLOCK_SIZE);
+	for (size_t i = 0; i < MONO_BLOCK_SIZE; i++) {
+		blockMono[i] = blockStereo[2 * i];
+	}
+	if (inputMode != lastMode) {
+		__sync_synchronize();
 		switch (inputMode) {
-			case INPUT_SEND:
-				packet.blockIndex = blockIndex++;
-				packet.playBlockIndex = outputBuffer.readPos;
-				send(udpSocket, (void *)&packet, sizeof(packet), 0);
-				break;
 			case INPUT_TO_OUTPUT:
-				sbufferWriteNext(&outputBuffer, blockStereo, false);
-				break;
-			case INPUT_NULL_TO_OUTPUT:
-				memset(blockStereo, 0, sizeof(sample_t) * STEREO_BLOCK_SIZE);
-				sbufferWriteNext(&outputBuffer, blockStereo, false);
+				//sbufferClear(&outputBuffer, 0);
 				break;
 			case INPUT_MEASURE_LATENCY:
-				aioLatBlock(blockMono, outputBuffer.writeLastPos + 1 - outputBuffer.readPos);
+				//sbufferClear(&outputBuffer, 0);
+				aioLatReset();
+				break;
+			case INPUT_SEND:
+				if (lastMode != INPUT_SEND_MUTE) {
+					blockIndex = 0;
+					packet.clientID = clientID;
+				}
+				break;
+			default: break;
+		}
+		lastMode = inputMode;
+	}
+	switch (inputMode) {
+		case INPUT_SEND:
+			packet.blockIndex = blockIndex++;
+			packet.playBlockIndex = outputBuffer.readPos;
+			send(udpSocket, (void *)&packet, sizeof(packet), 0);
+			break;
+		case INPUT_TO_OUTPUT:
+			sbufferWriteNext(&outputBuffer, blockStereo, false);
+			break;
+		case INPUT_NULL_TO_OUTPUT:
+			{
+				sample_t blockStereo[STEREO_BLOCK_SIZE];
+				memset(blockStereo, 0, sizeof(sample_t) * STEREO_BLOCK_SIZE);
+				sbufferWriteNext(&outputBuffer, blockStereo, false);
+			}
+			break;
+		case INPUT_MEASURE_LATENCY:
+			aioLatBlock(blockMono, outputBuffer.writeLastPos + 1 - outputBuffer.readPos);
+			{
+				sample_t blockStereo[STEREO_BLOCK_SIZE];
 				for (size_t i = 0; i < MONO_BLOCK_SIZE; i++) {
 					blockStereo[2 * i] = blockStereo[2 * i + 1] = blockMono[i];
 				}
 				sbufferWriteNext(&outputBuffer, blockStereo, false);
-				break;
-			case INPUT_DISCARD:
-			case INPUT_SEND_MUTE:
-			case INPUT_END:
-				break;
-		}
-		__sync_synchronize();
-		/*
-		if (blockIndex % 1000 == 999) {
-			sbufferPrintStats(&outputBuffer);
-		}
-		*/
+			}
+			break;
+		case INPUT_DISCARD:
+		case INPUT_SEND_MUTE:
+		case INPUT_END:
+			break;
 	}
-	return NULL;
+	__sync_synchronize();
+
+	return inputMode == INPUT_END ? paAbort : paContinue;
 }
 
 static void *udpReceiver(void *none) {
@@ -294,10 +303,7 @@ int main() {
 			"and set sampling rate of both microphone and headphones to " STR(SAMPLE_RATE) " Hz.\n\n");
 #endif
 	sbufferClear(&outputBuffer, 0);
-	aioConnectAudio(&paInputStream, &paOutputStream);
-
-	pthread_create(&inputThread, NULL, &inputWorker, NULL);
-	pthread_create(&outputThread, NULL, &outputWorker, NULL);
+	aioConnectAudio(&paInputStream, &paOutputStream, false, (PaStreamCallback *) &inputCallback, (PaStreamCallback *) &outputCallback);
 
 	printf("\n== 2/4 == MEASURE DELAY OF SOUND SYSTEM =======================================\n\n");
 
@@ -492,8 +498,6 @@ int main() {
 	// terminate
 	inputMode = INPUT_END;
 	outputMode = OUTPUT_END;
-	pthread_join(inputThread, NULL);
-	pthread_join(outputThread, NULL);
 	pthread_join(udpThread, NULL);
 	Pa_StopStream(paInputStream);
 	Pa_StopStream(paOutputStream);

@@ -15,9 +15,9 @@ server: server.c *.h
 	gcc $< -o $@ $(CFLAGS) $(LDFLAGS) $(LDFLAGS-client)
 
 %32.exe: %.c *.h
-	i686-w64-mingw32-gcc $< -o $@ -mthreads -lws2_32 $(LDFLAGS) $(LDFLAGS-client)
+	i686-w64-mingw32-gcc $< -o $@ -mthreads -lws2_32 $(LDFLAGS) $(LDFLAGS-client) -Lportaudio -Iportaudio/include
 %64.exe: %.c *.h
-	x86_64-w64-mingw32-gcc $< -o $@ -mthreads -lws2_32 $(LDFLAGS) $(LDFLAGS-client)
+	x86_64-w64-mingw32-gcc $< -o $@ -mthreads -lws2_32 $(LDFLAGS) $(LDFLAGS-client) -Lportaudio -Iportaudio/include
 
 clean:
 	rm -f client server client32.exe client64.exe
