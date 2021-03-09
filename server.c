@@ -16,9 +16,13 @@
 #include "surround.h"
 #include "net.h"
 #include "tty.h"
+#include "threadPriority.h"
 
 struct client {
-	bool connected;
+	bool connected;       // udp thread can set, main thread can unset
+	bool connectedMain;   // main thread can change to equal connected
+	bool connectedStatus; // status thread can change to equal connected
+		// all connected* must be unset before reusing
 	uint8_t id;
 	struct sockaddr_storage addr;
 	int64_t lastPacketUsec;
@@ -46,6 +50,8 @@ int udpSocket = -1;
 pthread_t udpThread;
 bindex_t blockIndex = 0;
 int64_t usecZero;
+
+uint32_t schedPolicy;
 
 struct {
 	bool enabled;
@@ -92,18 +98,28 @@ volatile enum udpState {
 	ms -= 1000 * s; s -= 60 * m; m -= 60 * h; \
 	printf("[%02d:%02d:%02d.%03d] " fmt "%s\n", (int)(h), (int)(m), (int)(s), (int)(ms), __VA_ARGS__); }
 
-struct client *getClient(size_t c) {
-	if (!clients[c] || !clients[c]->connected) return NULL;
-	return clients[c];
+inline struct client *getClient(size_t c) {
+	struct client *client = clients[c];
+	if (!client || !client->connected) return NULL;
+	__sync_synchronize();
+	return client;
 }
+
+inline struct client *getClientOrdered(size_t c) {
+	struct client *client = clientsOrdered[c];
+	if (!client || !client->connected) return NULL;
+	__sync_synchronize();
+	return client;
+}
+#define CLIENT_CONNECTED_FIELD connected
 
 #define FOR_CLIENTS(CLIENT) \
 	for (size_t CLIENT##_INDEX = 0; CLIENT##_INDEX < MAX_CLIENTS; CLIENT##_INDEX++) \
-	for (struct client *CLIENT = getClient(CLIENT##_INDEX); CLIENT; CLIENT=NULL)
+	for (struct client *CLIENT = clients[CLIENT##_INDEX]; CLIENT && CLIENT->CLIENT_CONNECTED_FIELD; CLIENT=NULL)
 
 #define FOR_CLIENTS_ORDERED(CLIENT) \
 	for (size_t CLIENT##_INDEX = 0; CLIENT##_INDEX < MAX_CLIENTS; CLIENT##_INDEX++) \
-	for (struct client *CLIENT = clientsOrdered[CLIENT##_INDEX]; CLIENT && CLIENT->connected; CLIENT=NULL)
+	for (struct client *CLIENT = clientsOrdered[CLIENT##_INDEX]; CLIENT && CLIENT->CLIENT_CONNECTED_FIELD; CLIENT=NULL)
 
 void clientsSurroundReinit() {
 	size_t clientsCnt = 0;
@@ -126,10 +142,12 @@ struct client *newClient() {
 			}
 			client->id = i;
 			client->connected = false;
+			client->connectedMain = false;
+			client->connectedStatus = false;
 			__sync_synchronize();
 			clients[i] = client;
 			break;
-		} else if (!clients[i]->connected) {
+		} else if (!clients[i]->connected && !clients[i]->connectedStatus) {
 			client = clients[i];
 			break;
 		}
@@ -342,6 +360,12 @@ void *udpReceiver(void *none) {
 	struct client *client;
 	socklen_t addr_len = sizeof(addr);
 
+	if (schedPolicy != SCHED_OTHER) {
+		threadPriorityRealtime(1);
+	} else {
+		threadPriorityNice(1);
+	}
+
 	while ((size = recvfrom(udpSocket, packetRaw, sizeof(union packet), 0, (struct sockaddr *)&addr, &addr_len)) >= 0) {
 		switch (packetRaw[0]) {
 			case PACKET_HELO:
@@ -411,17 +435,33 @@ void *udpReceiver(void *none) {
 	return NULL;
 }
 
+#undef CLIENT_CONNECTED_FIELD
+#define CLIENT_CONNECTED_FIELD connectedStatus
+
 int64_t getBlockUsec(bindex_t index) {
 	return (int64_t)index * 1000000 * MONO_BLOCK_SIZE / SAMPLE_RATE;
 }
 
-bool statusLog = false; // FIXME not used -- update macros below
+
+pthread_t statusThread;
 int statusLines = -1;
+int64_t statusSleepPoints = 1;
 bindex_t statusIndex = 0;
+void statusSleepPoint(bool last) {
+	static int cnt = 1;
+	static int i = 0;
+	usleep(1000000ull * BLOCKS_PER_STAT * MONO_BLOCK_SIZE / SAMPLE_RATE / cnt);
+	i++;
+	if (last) {
+		cnt = i;
+		i = 0;
+	}
+
+}
 void statusAppend(struct client *client, char *s) {
 	while (*s) *client->statusPacketPos++ = *s++;
 }
-void statusLineSep(bool last) {
+void statusLineSep(bool last) { // calls usleep
 	if (statusLines < 0) { // init
 		statusLines = 0;
 		FOR_CLIENTS(client) {
@@ -451,12 +491,174 @@ void statusLineSep(bool last) {
 			client->statusPacket.packetIndex++;
 		}
 		statusLines = last ? -1 : 0;
+		statusSleepPoint(last);
 	}
 }
 
+void *statusWorker(void *nothing) {
+	if (schedPolicy == SCHED_OTHER) {
+		threadPriorityNice(19);
+	}
+	while (udpState == UDP_OPEN) {
+		__sync_synchronize();
+
+		{
+			for (int i = 0; i < MAX_CLIENTS; i++) {
+				if (clients[i] && clients[i]->connected) clients[i]->connectedStatus = true;
+			}
+			__sync_synchronize();
+			for (int i = 0; i < MAX_CLIENTS; i++) {
+				if (clients[i] && !clients[i]->connected) clients[i]->connectedStatus = false;
+			}
+			int connectedCnt = 0;
+			FOR_CLIENTS(c) connectedCnt++;
+			if (connectedCnt == 0) {
+				statusSleepPoint(true);
+				continue;
+			}
+		}
+
+		char str[80]; // temporary string, at most one line
+		bool statusLog = statusIndex % (BLOCKS_PER_SRV_STAT/BLOCKS_PER_STAT) == 0;
+		if (statusLog) msg("\n");
+
+#define LN        statusLineSep(false); FOR_CLIENTS(C)
+#define TXT(STR)  statusAppend(C, STR)
+
+		LN TXT("---------------------  left");
+
+		FOR_CLIENTS_ORDERED(client) {
+			char *s = str;
+			s += sprintf(s, "%-10s", client->name);
+			if (client->aioLatency > 0) {
+				s += sprintf(s, "%3.0f+", client->aioLatency);
+			} else {
+				s += sprintf(s, "  ?+");
+			}
+			if ((client->restLatencyAvg < 10000) && !client->muted) {
+				s += sprintf(s, "%-4.0fms ", client->restLatencyAvg);
+			} else {
+				s += sprintf(s, "?   ms ");
+			}
+			*s++ = client->isLeader ? 'L' : ' ';
+
+			float avg, peak;
+			bufferOutputStats(&client->buffer, &avg, &peak);
+			ttyFormatSndLevel(&s, avg + client->dBAdj, peak + client->dBAdj);
+
+			if (statusLog) {
+				printf("%s\n", str);
+			}
+
+			LN {
+				TXT(C == client ? "." : " ");
+				TXT(str);
+			}
+		}
+		if (statusLog) { printf("\n"); }
+
+
+		/*
+		for (int i = 0; i < 15; i++) {
+			LN TXT("fake user");
+		}
+		*/
+
+		LN TXT("---------------------  right");
+		LN TXT("");
+		LN TXT("[d/u] move down/up in list");
+		LN TXT("[+/-] decrease/increase microphone volume by 2 dB");
+
+		LN {
+			TXT("[M]   ");
+			TXT(!C->mutedMic ? "mute microphone  " : "unmute microphone");
+			TXT("   [A] ");
+			TXT(!C->muted ? "mute incoming audio" : "unmute incoming audio");
+		}
+
+		LN;
+		{ // leading track
+			char *leadingTrackName = NULL;
+			if (metronome.enabled) {
+				leadingTrackName = "metronome ";
+			} else {
+				FOR_CLIENTS(client) {
+					if (client->isLeader) leadingTrackName = client->name;
+				}
+			}
+			char delayStr[6];
+			snprintf(delayStr, 6, "%4lu", (uint64_t)leading.delay * MONO_BLOCK_SIZE * 1000 / SAMPLE_RATE);
+			LN {
+				TXT("Leading track:  ");
+				if (leadingTrackName) {
+					TXT(C->isLeader ? "you       " : leadingTrackName);
+					TXT(delayStr);
+					TXT(" ms");
+				} else {
+					TXT("-                ");
+				}
+				TXT("     [L] ");
+				TXT(C->isLeader ? "cease leadership" : "become leader   ");
+				TXT("  [m] ");
+				TXT(metronome.enabled ? "stop metronome" : "start metronome");
+			}
+		}
+
+		LN;
+		sprintf(str, "%3lu", metronome.beatsPerBar);
+		LN {
+			TXT("Metronome:     ");
+			TXT(str);
+			TXT(" beats per bar      [h/l] -/+ 1");
+		}
+
+		sprintf(str, "%3.0f", metronome.beatsPerMinute);
+		LN {
+			TXT("               ");
+			TXT(str);
+			TXT(" beats per minute   [j/k] -/+ 2    [J/K] -/+ 20");
+		}
+
+
+		LN;
+		if (recording.enabled) {
+			float durSec = (blockIndex - recording.startTime) * MONO_BLOCK_SIZE / SAMPLE_RATE;
+			sprintf(str, "%02d:%02d  %s. leader    [r/R] stop", (int)durSec / 60, (int)durSec % 60, recording.inclLeader ? "incl" : "excl");
+		} else {
+			sprintf(str, "%19s    [r/R] start incl./excl. leading track", "");
+		}
+		LN {
+			TXT("Recording:     ");
+			TXT(str);
+		}
+
+#undef TXT
+#undef LN
+
+		statusLineSep(true);
+		if (statusLog) printf("\n");
+
+		if (statusLog) {
+			printf("BLOCKS      play  lost  wait  skip  delay  lead       read    write\n");
+			FOR_CLIENTS_ORDERED(client) {
+				size_t play, lost, wait, skip;
+				ssize_t delay;
+				bufferSrvStatsReset(&client->buffer, &play, &lost, &wait, &skip, &delay);
+				printf("%-10s %5zu %5zu %5zu %5zu %6zd %5d   %8d %8d\n", client->name, play, lost, wait, skip, delay, client->leadingDelay,
+						client->buffer.readPos, client->buffer.writeLastPos);
+			}
+			printf("\n");
+		}
+	}
+	return NULL;
+}
+
+#undef CLIENT_CONNECTED_FIELD
+#define CLIENT_CONNECTED_FIELD connectedMain
 
 #define ERR(...) {msg(__VA_ARGS__); return 1; }
 int main() {
+	usecZero = getUsec(0);
 	netInit();
 	udpSocket = netOpenPort(STR(UDP_PORT));
 	if (udpSocket < 0) {
@@ -464,7 +666,23 @@ int main() {
 	}
 
 	udpState = UDP_OPEN;
-	pthread_create(&udpThread, NULL, &udpReceiver, NULL);
+	{
+		const int64_t nsPerBlock = 1000000000ull * MONO_BLOCK_SIZE / SAMPLE_RATE;
+		if (threadPriorityDeadline(nsPerBlock / 10, nsPerBlock, 0)) {
+			schedPolicy = SCHED_DEADLINE;
+			printf("Using deadline priority for sound mixer.\n");
+		} else if (threadPriorityRealtime(2)) {
+			schedPolicy = SCHED_RR;
+			printf("Using realtime priorities.\n");
+		} else {
+			schedPolicy = SCHED_OTHER;
+			printf("Using nice levels only.\n");
+		}
+	}
+
+
+	if (pthread_create(&udpThread, NULL, &udpReceiver, NULL) != 0) ERR("Cannot create thread.");
+	if (pthread_create(&statusThread, NULL, &statusWorker, NULL) != 0) ERR("Cannot create thread.");
 
 	metronome.enabled = false;
 	metronome.beatsPerMinute = METR_DEFAULT_BPM;
@@ -473,15 +691,24 @@ int main() {
 	leading.delay = 0;
 	// leading.delay = (int64_t) METR_DELAY_MSEC * SAMPLE_RATE / 1000 / MONO_BLOCK_SIZE; // TODO dynamic adjustment
 
-	usecZero = getUsec(0);
 	int64_t usecFreeSum = 0;
 	int64_t usecFreeMin = INT64_MAX;
+	int64_t usecWakeDelaySum = 0;
+	int64_t usecWakeDelayMax = 0;
+	int64_t usecLoadMax = 0;
+	int64_t usecAwaken = 0;
 	struct packetServerData packet = { .type = PACKET_DATA };
 
+
+	printf("\n");
 	msg("Virtual Choir Rehearsal Room, server v" STR(APP_VERSION) " started.");
 
 	while (udpState == UDP_OPEN) {
 		__sync_synchronize();
+
+		for (int i = 0; i < MAX_CLIENTS; i++) {
+			if (clients[i] && clients[i]->connected) clients[i]->connectedMain = true;
+		}
 
 		// sound mixing [
 
@@ -625,177 +852,75 @@ int main() {
 		}
 		blockIndex++;
 
-		// status string [
-		if (blockIndex % BLOCKS_PER_STAT == 0) {
-			char str[80]; // temporary string, at most one line
-			statusLog = blockIndex % BLOCKS_PER_SRV_STAT == 0; // FIXME not used, update TXT and LN macros
-			if (statusLog) msg("\n");
 
-#define LN        statusLineSep(false); FOR_CLIENTS(C)
-#define TXT(STR)  statusAppend(C, STR)
-
-			LN TXT("---------------------  left");
-
-			FOR_CLIENTS_ORDERED(client) {
-				char *s = str;
-				s += sprintf(s, "%-10s", client->name);
-				if (client->aioLatency > 0) {
-					s += sprintf(s, "%3.0f+", client->aioLatency);
-				} else {
-					s += sprintf(s, "  ?+");
-				}
-				if ((client->restLatencyAvg < 10000) && !client->muted) {
-					s += sprintf(s, "%-4.0fms ", client->restLatencyAvg);
-				} else {
-					s += sprintf(s, "?   ms ");
-				}
-				*s++ = client->isLeader ? 'L' : ' ';
-
-				float avg, peak;
-				bufferOutputStats(&client->buffer, &avg, &peak);
-				ttyFormatSndLevel(&s, avg + client->dBAdj, peak + client->dBAdj);
-
-				if (statusLog) {
-					printf("%s\n", str);
-				}
-
-				LN {
-					TXT(C == client ? "." : " ");
-					TXT(str);
-				}
-			}
-			if (statusLog) { printf("\n"); }
-
-
-			/*
-			for (int i = 0; i < 15; i++) {
-				LN TXT("fake user");
-			}
-			*/
-
-			LN TXT("---------------------  right");
-			LN TXT("");
-			LN TXT("[d/u] move down/up in list");
-			LN TXT("[+/-] decrease/increase microphone volume by 2 dB");
-
-			LN {
-				TXT("[M]   ");
-				TXT(!C->mutedMic ? "mute microphone  " : "unmute microphone");
-				TXT("   [A] ");
-				TXT(!C->muted ? "mute incoming audio" : "unmute incoming audio");
-			}
-
-			LN;
-			{ // leading track
-				char *leadingTrackName = NULL;
-				if (metronome.enabled) {
-					leadingTrackName = "metronome ";
-				} else {
-					FOR_CLIENTS(client) {
-						if (client->isLeader) leadingTrackName = client->name;
-					}
-				}
-				char delayStr[6];
-				snprintf(delayStr, 6, "%4lu", (uint64_t)leading.delay * MONO_BLOCK_SIZE * 1000 / SAMPLE_RATE);
-				LN {
-					TXT("Leading track:  ");
-					if (leadingTrackName) {
-						TXT(C->isLeader ? "you       " : leadingTrackName);
-						TXT(delayStr);
-						TXT(" ms");
-					} else {
-						TXT("-                ");
-					}
-					TXT("     [L] ");
-					TXT(C->isLeader ? "cease leadership" : "become leader   ");
-					TXT("  [m] ");
-					TXT(metronome.enabled ? "stop metronome" : "start metronome");
-				}
-			}
-
-			LN;
-			sprintf(str, "%3lu", metronome.beatsPerBar);
-			LN {
-				TXT("Metronome:     ");
-				TXT(str);
-				TXT(" beats per bar      [h/l] -/+ 1");
-			}
-
-			sprintf(str, "%3.0f", metronome.beatsPerMinute);
-			LN {
-				TXT("               ");
-				TXT(str);
-				TXT(" beats per minute   [j/k] -/+ 2    [J/K] -/+ 20");
-			}
-
-
-			LN;
-			if (recording.enabled) {
-				float durSec = (blockIndex - recording.startTime) * MONO_BLOCK_SIZE / SAMPLE_RATE;
-				sprintf(str, "%02d:%02d  %s. leader    [r/R] stop", (int)durSec / 60, (int)durSec % 60, recording.inclLeader ? "incl" : "excl");
-			} else {
-				sprintf(str, "%19s    [r/R] start incl./excl. leading track", "");
-			}
-			LN {
-				TXT("Recording:     ");
-				TXT(str);
-			}
-
-#undef TXT
-#undef LN
-
-			statusLineSep(true);
-			if (statusLog) printf("\n");
-		}
-		// ] end of status string
+		// timing [
 
 		int64_t usec = getUsec(usecZero);
-		int64_t usecWait = getBlockUsec(blockIndex) - usec;
-		usecFreeMin = (usecFreeMin > usecWait ? usecWait : usecFreeMin);
-		usecFreeSum += usecWait;
+		int64_t usecFree = getBlockUsec(blockIndex) - usec;
+		usecFreeMin = (usecFreeMin > usecFree ? usecFree : usecFreeMin);
+		usecFreeSum += usecFree;
+		int64_t usecWakeDelay = usecAwaken - getBlockUsec(blockIndex - 1);
+		usecWakeDelayMax = (usecWakeDelayMax < usecWakeDelay ? usecWakeDelay : usecWakeDelayMax);
+		usecWakeDelaySum += usecWakeDelay;
+		int64_t usecLoad = usec - usecAwaken;
+		usecLoadMax = (usecLoadMax < usecLoad ? usecLoad : usecLoadMax);
+
+		FOR_CLIENTS(client) {
+			if (usec - client->lastPacketUsec > 1000000) {
+				client->connected = false;
+				client->connectedMain = false;
+				msg("Client %d '%s' timeout, disconnected...", client->id, client->name);
+			}
+		}
 
 		if (blockIndex % BLOCKS_PER_SRV_STAT == 0) {
-			printf("BLOCKS      play  lost  wait  skip  delay  lead       read    write\n");
-			FOR_CLIENTS_ORDERED(client) {
-				size_t play, lost, wait, skip;
-				ssize_t delay;
-				bufferSrvStatsReset(&client->buffer, &play, &lost, &wait, &skip, &delay);
-				printf("%-10s %5zu %5zu %5zu %5zu %6zd %5d   %8d %8d\n", client->name, play, lost, wait, skip, delay, (leadingEnabled ? client->leadingDelay : 0),
-						client->buffer.readPos, client->buffer.writeLastPos);
-			}
-			printf("\n");
-
 			int64_t usecTot   = getBlockUsec(BLOCKS_PER_SRV_STAT);
 			int64_t usecBlock = getBlockUsec(1);
-			printf("Sound mixer load: %6.2f %% avg, %6.2f %% max\n\n",
-					(float)(usecTot - usecFreeSum)/usecTot * 100,
-					(float)(usecBlock - usecFreeMin)/usecBlock * 100);
+			msg("\n"
+					"  DELAY %6.0f us (%6.2f %%) avg,%6.0f us (%6.2f %%) max\n"
+					"  LOAD  %6.0f us (%6.2f %%) avg,%6.0f us (%6.2f %%) max\n"
+					"  FREE  %6.0f us (%6.2f %%) avg,%6.0f us (%6.2f %%) min\n",
+					(float)(usecWakeDelaySum) / BLOCKS_PER_SRV_STAT,
+					(float)(usecWakeDelaySum) / usecTot * 100,
+					(float)(usecWakeDelayMax),
+					(float)(usecWakeDelayMax) / usecBlock * 100,
+					(float)(usecTot - usecWakeDelaySum - usecFreeSum) / BLOCKS_PER_SRV_STAT,
+					(float)(usecTot - usecWakeDelaySum - usecFreeSum) / usecTot * 100,
+					(float)(usecLoadMax),
+					(float)(usecLoadMax) / usecBlock * 100,
+					(float)(usecFreeSum) / BLOCKS_PER_SRV_STAT,
+					(float)(usecFreeSum) / usecTot * 100,
+					(float)(usecFreeMin > 0 ? usecFreeMin : 0),
+					(float)(usecFreeMin > 0 ? usecFreeMin : 0) / usecBlock * 100);
+
 			usecFreeSum = 0;
 			usecFreeMin = INT64_MAX;
-		}
-
-		if (blockIndex % 50 == 0) {
-			FOR_CLIENTS(client) {
-				if (usec - client->lastPacketUsec > 1000000) {
-					client->connected = false;
-					msg("Client %d '%s' timeout, disconnected...", client->id, client->name);
-				}
-			}
-		}
-
-		if (blockIndex % 1000 == 0) {
+			usecWakeDelaySum = 0;
+			usecWakeDelayMax = 0;
+			usecLoadMax = 0;
 		}
 
 		__sync_synchronize();
-		usecWait = getBlockUsec(blockIndex) - getUsec(usecZero);
-		if (usecWait > 0) {
-			usleep(usecWait);
-		} else {
+		int64_t usecWait = getBlockUsec(blockIndex) - getUsec(usecZero);
+		if (usecWait < 0) {
 			msg("Sound mixer was late by %ld us...", -usecWait);
 		}
+		//while (usecWait > 0) {
+		if (usecWait > 0) {
+			if (schedPolicy == SCHED_DEADLINE) {
+				sched_yield();
+			} else {
+				usleep(usecWait);
+			}
+			//usecWait = getBlockUsec(blockIndex) - getUsec(usecZero);
+		}
+		usecAwaken = getUsec(usecZero);
+
+		// ] end of timing
 	}
 
 	pthread_join(udpThread, NULL);
+	pthread_join(statusThread, NULL);
 	netCleanup();
 	msg("Exitting...");
 

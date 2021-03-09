@@ -164,7 +164,12 @@ Each client can:
 Server usage
 ------------
 
-Just compile and run, there are no further settings.
+Just compile and run;
+optionally, you can allow real-time priorities for better timing:
+
+    make server
+    sudo setcap cap_sys_nice=pe server  # optional
+    ./server
 
 Recordings are being saved under current working directory,
 so it may be good idea to change it in advance.

@@ -11,6 +11,7 @@
 #define BLOCKS_PER_SRV_STAT   10000  // should be divisible by BLOCKS_PER_STAT
 
 #define CLIENT_SOCK_BUF_SIZE 100000 // B
+// #define SERVER_SCHED_DEADLINE
 
 #define SAMPLE_RATE           48000
 #define MONO_BLOCK_SIZE         128  // 2.667 ms
@@ -26,7 +27,7 @@
 	// multiplies avg latency every block, it's halved after ~50 ms
 
 #define STATUS_WIDTH             79
-#define STATUS_HEIGHT           100
+#define STATUS_HEIGHT           200
 #define STATUS_LINES_PER_PACKET   4
 #define SHELO_STR_LEN           500
 
