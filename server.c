@@ -51,7 +51,7 @@ pthread_t udpThread;
 bindex_t blockIndex = 0;
 int64_t usecZero;
 
-uint32_t schedPolicy;
+enum { SP_NICE, SP_REALTIME, SP_DEADLINE } schedPolicy;
 
 struct {
 	bool enabled;
@@ -360,7 +360,7 @@ void *udpReceiver(void *none) {
 	struct client *client;
 	socklen_t addr_len = sizeof(addr);
 
-	if (schedPolicy != SCHED_OTHER) {
+	if (schedPolicy != SP_NICE) {
 		threadPriorityRealtime(1);
 	} else {
 		threadPriorityNice(1);
@@ -496,7 +496,7 @@ void statusLineSep(bool last) { // calls usleep
 }
 
 void *statusWorker(void *nothing) {
-	if (schedPolicy == SCHED_OTHER) {
+	if (schedPolicy == SP_NICE) {
 		threadPriorityNice(19);
 	}
 	while (udpState == UDP_OPEN) {
@@ -669,13 +669,13 @@ int main() {
 	{
 		const int64_t nsPerBlock = 1000000000ull * MONO_BLOCK_SIZE / SAMPLE_RATE;
 		if (threadPriorityDeadline(nsPerBlock / 10, nsPerBlock, 0)) {
-			schedPolicy = SCHED_DEADLINE;
+			schedPolicy = SP_DEADLINE;
 			printf("Using deadline priority for sound mixer.\n");
 		} else if (threadPriorityRealtime(2)) {
-			schedPolicy = SCHED_RR;
+			schedPolicy = SP_REALTIME;
 			printf("Using realtime priorities.\n");
 		} else {
-			schedPolicy = SCHED_OTHER;
+			schedPolicy = SP_NICE;
 			printf("Using nice levels only.\n");
 		}
 	}
@@ -907,7 +907,7 @@ int main() {
 		}
 		//while (usecWait > 0) {
 		if (usecWait > 0) {
-			if (schedPolicy == SCHED_DEADLINE) {
+			if (schedPolicy == SP_DEADLINE) {
 				sched_yield();
 			} else {
 				usleep(usecWait);
