@@ -8,7 +8,7 @@
 #define NAME_LEN                 10
 #define MAX_CLIENTS             100
 #define BLOCKS_PER_STAT          50
-#define BLOCKS_PER_SRV_STAT   10000  // should be divisible by BLOCKS_PER_STAT
+#define BLOCKS_PER_SRV_STAT    2000  // should be divisible by BLOCKS_PER_STAT
 
 #define CLIENT_SOCK_BUF_SIZE 100000 // B
 // #define SERVER_SCHED_DEADLINE

@@ -445,7 +445,6 @@ int64_t getBlockUsec(bindex_t index) {
 
 pthread_t statusThread;
 int statusLines = -1;
-int64_t statusSleepPoints = 1;
 bindex_t statusIndex = 0;
 void statusSleepPoint(bool last) {
 	static int cnt = 1;
@@ -658,6 +657,7 @@ void *statusWorker(void *nothing) {
 
 #define ERR(...) {msg(__VA_ARGS__); return 1; }
 int main() {
+	setlinebuf(stdout);
 	usecZero = getUsec(0);
 	netInit();
 	udpSocket = netOpenPort(STR(UDP_PORT));
