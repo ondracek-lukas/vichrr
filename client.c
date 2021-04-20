@@ -17,6 +17,7 @@
 
 struct stereoBuffer outputBuffer;
 PaStream *paInputStream = NULL, *paOutputStream = NULL;
+int inputChannels;
 int udpSocket = -1;
 pthread_t udpThread;
 uint8_t clientID;
@@ -90,7 +91,7 @@ int outputCallback(const sample_t *input, sample_t *output, unsigned long frameC
 	return outputMode == OUTPUT_END ? paComplete : paContinue;
 }
 
-int inputCallback(const sample_t *blockStereo, const sample_t *output, unsigned long frameCount, PaStreamCallbackTimeInfo *timeinfo, PaStreamCallbackFlags statusFlags, void *userData) {
+int inputCallback(const sample_t *blockOrig, const sample_t *output, unsigned long frameCount, PaStreamCallbackTimeInfo *timeinfo, PaStreamCallbackFlags statusFlags, void *userData) {
 	static bindex_t blockIndex = 0;
 	static enum inputMode lastMode = INPUT_END;
 	static struct packetClientData packet = {};
@@ -103,8 +104,8 @@ int inputCallback(const sample_t *blockStereo, const sample_t *output, unsigned 
 	}
 
 	// Pa_ReadStream(paInputStream, blockStereo, MONO_BLOCK_SIZE);
-	for (size_t i = 0; i < MONO_BLOCK_SIZE; i++) {
-		blockMono[i] = blockStereo[2 * i];
+	for (size_t i = 0, j = 0; i < MONO_BLOCK_SIZE; i++, j += inputChannels) {
+		blockMono[i] = blockOrig[j];
 	}
 	if (inputMode != lastMode) {
 		__sync_synchronize();
@@ -133,7 +134,13 @@ int inputCallback(const sample_t *blockStereo, const sample_t *output, unsigned 
 			send(udpSocket, (void *)&packet, sizeof(packet), 0);
 			break;
 		case INPUT_TO_OUTPUT:
-			sbufferWriteNext(&outputBuffer, blockStereo, false);
+			{
+				sample_t blockStereo[STEREO_BLOCK_SIZE];
+				for (int i = 0, j=0; i < MONO_BLOCK_SIZE; i++, j += 2) {
+					blockStereo[j] = blockStereo[j + 1] = blockMono[i];
+				}
+				sbufferWriteNext(&outputBuffer, blockStereo, false);
+			}
 			break;
 		case INPUT_NULL_TO_OUTPUT:
 			{
@@ -303,7 +310,7 @@ int main() {
 			"and set sampling rate of both microphone and headphones to " STR(SAMPLE_RATE) " Hz.\n\n");
 #endif
 	sbufferClear(&outputBuffer, 0);
-	aioConnectAudio(&paInputStream, &paOutputStream, false, (PaStreamCallback *) &inputCallback, (PaStreamCallback *) &outputCallback);
+	aioConnectAudio(&paInputStream, &paOutputStream, false, (PaStreamCallback *) &inputCallback, (PaStreamCallback *) &outputCallback, &inputChannels);
 
 	printf("\n== 2/4 == MEASURE DELAY OF SOUND SYSTEM =======================================\n\n");
 

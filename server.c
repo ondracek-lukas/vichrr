@@ -33,6 +33,7 @@ struct client {
 	float dBAdj;
 	bool muted;
 	bool mutedMic;
+	bool hearSelf;
 	bool isLeader;
 	bindex_t lastKeyPressIndex;
 	bindex_t lastKeyPress;
@@ -221,6 +222,7 @@ void udpRecvHelo(struct client *client, struct packetClientHelo *packet) {
 	client->dBAdj = packet->dBAdj;
 	client->muted = false;
 	client->mutedMic = false;
+	client->hearSelf = false;
 	surroundInitCtx(&client->surroundCtx, client->dBAdj, 0, 2);
 	bufferOutputStatsReset(&client->buffer, true);
 	client->lastKeyPress = 0;
@@ -233,7 +235,7 @@ void udpRecvHelo(struct client *client, struct packetClientHelo *packet) {
 	struct packetServerHelo packetR = {};
 	packetR.clientID = client->id;
 	packetR.initBlockIndex = blockIndex;
-	strncpy(packetR.str, "durRmjkhlJKLA-+",
+	strncpy(packetR.str, "durRmjkhlJKLAS-+",
 		SHELO_STR_LEN);
 
 	udpSendPacket(client, &packetR, (void *)strchr(packetR.str, '\0') - (void *)&packetR);
@@ -331,6 +333,9 @@ void udpRecvKeyPress(struct client *client, struct packetKeyPress *packet) {
 			break;
 		case 'A': // mute incoming audio
 			client->muted ^= 1;
+			break;
+		case 'S': // hear self
+			client->hearSelf ^= 1;
 			break;
 		case '-': // decrease microphone volume
 			client->dBAdj -= 2;
@@ -572,7 +577,9 @@ void *statusWorker(void *nothing) {
 			TXT("[M]   ");
 			TXT(!C->mutedMic ? "mute microphone  " : "unmute microphone");
 			TXT("   [A] ");
-			TXT(!C->muted ? "mute incoming audio" : "unmute incoming audio");
+			TXT(!C->muted ? "mute incoming audio  " : "unmute incoming audio");
+			TXT("   [S] ");
+			TXT(!C->hearSelf ? "hear self" : "mute self");
 		}
 
 		LN;
@@ -740,7 +747,16 @@ int main() {
 			if (client->muted) continue;
 			sample_t *clientBlock = client->lastReadBlock;
 			sample_t *leadingBlock = NULL;
-			if (leadingEnabled && !client->isLeader) {
+
+			for (size_t i = 0; i < STEREO_BLOCK_SIZE; i++)
+				block[i] = mixedBlock[i]; // all except leader
+
+			if (!(leadingEnabled && client->isLeader) && !client->hearSelf) {
+				for (size_t i = 0; i < STEREO_BLOCK_SIZE; i++)
+					block[i] -= clientBlock[i]; // all except leader and self
+			}
+
+			if (leadingEnabled && (!client->isLeader || client->hearSelf)) {
 				int delay;
 				if (client->restLatencyAvg != FLT_MAX) {
 					delay = ((client->aioLatency > 0 ? client->aioLatency : 20) + client->restLatencyAvg) * SAMPLE_RATE / 1000 / MONO_BLOCK_SIZE;
@@ -764,14 +780,7 @@ int main() {
 				leadingBlock = sbufferRead(&leading.buffer, blockIndex + delay, fadeIn, fadeOut);
 
 				for (size_t i = 0; i < STEREO_BLOCK_SIZE; i++)
-					block[i] = mixedBlock[i] - clientBlock[i] + leadingBlock[i];
-
-			} else if (client->isLeader) {
-				for (size_t i = 0; i < STEREO_BLOCK_SIZE; i++)
-					block[i] = mixedBlock[i];
-			} else {
-				for (size_t i = 0; i < STEREO_BLOCK_SIZE; i++)
-					block[i] = mixedBlock[i] - clientBlock[i];
+					block[i] += leadingBlock[i]; // all except self
 			}
 
 			ssize_t err = udpSendPacket(client, &packet, sizeof(struct packetServerData));

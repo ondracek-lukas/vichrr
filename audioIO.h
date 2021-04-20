@@ -10,12 +10,11 @@
 #include <pa_win_wasapi.h>
 #endif
 
-bool aioConnectAudio(PaStream **paInputStream, PaStream **paOutputStream, bool forceDefault, PaStreamCallback *inputCallback, PaStreamCallback *outputCallback) {
+bool aioConnectAudio(PaStream **paInputStream, PaStream **paOutputStream, bool forceDefault, PaStreamCallback *inputCallback, PaStreamCallback *outputCallback, int *inputChannelsPtr) {
 	PaError err;
 
 
 	PaDeviceIndex inputIndex, outputIndex;
-	float inputSuggLat, outputSuggLat;
 	bool useWasapiExclusive = 0;
 
 #ifdef __WIN32__
@@ -37,8 +36,6 @@ bool aioConnectAudio(PaStream **paInputStream, PaStream **paOutputStream, bool f
 	if (forceDefault || (ttyReadKey() != 'c')) {
 		inputIndex = Pa_GetDefaultInputDevice();
 		outputIndex = Pa_GetDefaultOutputDevice();
-		inputSuggLat = 0;
-		outputSuggLat = 0;
 #ifdef __WIN32__
 	if (wasapiIndex >= 0) {
 		const PaHostApiInfo *wasapiInfo = Pa_GetHostApiInfo(wasapiIndex);
@@ -56,7 +53,7 @@ bool aioConnectAudio(PaStream **paInputStream, PaStream **paOutputStream, bool f
 
 			for (PaHostApiIndex apiIndex = 0; apiIndex < apiCnt; apiIndex++) {
 				const PaHostApiInfo *apiInfo = Pa_GetHostApiInfo(apiIndex);
-				printf("  %s API (type %d)%s\n", apiInfo->name, apiInfo->type, (apiIndex == apiDefault ? ", system default" : ""));
+				printf("  %s API%s\n", apiInfo->name, (apiIndex == apiDefault ? ", system default" : ""));
 				// apiInfo -> defaultInputDevice, deviceCount
 				
 				for (int apiDeviceIndex = 0; apiDeviceIndex < apiInfo->deviceCount; apiDeviceIndex++) {
@@ -64,18 +61,14 @@ bool aioConnectAudio(PaStream **paInputStream, PaStream **paOutputStream, bool f
 					const PaDeviceInfo *deviceInfo = Pa_GetDeviceInfo(deviceIndex);
 					printf("  %3d: %s, %.0f Hz\n", deviceIndex, deviceInfo->name, deviceInfo->defaultSampleRate);
 					if (deviceInfo->maxInputChannels > 0) {
-						printf("         IN:  %3d channels, latency %.2f--%.2f ms%s\n",
+						printf("         IN:  %3d channels%s\n",
 								deviceInfo->maxInputChannels,
-								deviceInfo->defaultLowInputLatency * 1000,
-								deviceInfo->defaultHighInputLatency * 1000,
 								(deviceIndex == apiInfo->defaultInputDevice ? ", default input" : ""));
 					}
 
 					if (deviceInfo->maxOutputChannels > 0) {
-						printf("         OUT: %3d channels, latency %.2f--%.2f ms%s\n",
+						printf("         OUT: %3d channels%s\n",
 								deviceInfo->maxOutputChannels,
-								deviceInfo->defaultLowOutputLatency * 1000,
-								deviceInfo->defaultHighOutputLatency * 1000,
 								(deviceIndex == apiInfo->defaultOutputDevice ? ", default output" : ""));
 					}
 
@@ -92,8 +85,6 @@ bool aioConnectAudio(PaStream **paInputStream, PaStream **paOutputStream, bool f
 
 		inputIndex = ttyPromptInt("Choose input device id");
 		outputIndex = ttyPromptInt("Choose output device id");
-		inputSuggLat = ttyPromptFloat("Set minimal input latency");
-		inputSuggLat = ttyPromptFloat("Set minimal output latency");
 
 #ifdef __WIN32__
 		const PaDeviceInfo *inputInfo  = Pa_GetDeviceInfo(inputIndex);
@@ -105,9 +96,14 @@ bool aioConnectAudio(PaStream **paInputStream, PaStream **paOutputStream, bool f
 
 	}
 
+	{
+		const PaDeviceInfo *deviceInfo = Pa_GetDeviceInfo(inputIndex);
+		*inputChannelsPtr = deviceInfo->maxInputChannels;
+		if (*inputChannelsPtr > 2) *inputChannelsPtr = 2; // 1 is sufficient but there were issues with it
+	}
 	const PaStreamParameters inputParameters = {
 		.device = inputIndex,
-		.channelCount = 2,
+		.channelCount = *inputChannelsPtr,
 		.sampleFormat = paInt16,
 		.suggestedLatency =  0,
 		.hostApiSpecificStreamInfo = (useWasapiExclusive ? &wasapiInfo : NULL)};
