@@ -1,6 +1,6 @@
 # Virtual Choir Rehearsal Room  Copyright (C) 2020  Lukas Ondracek <ondracek.lukas@gmail.com>, use under GNU GPLv3
 
-LDFLAGS-client=-lportaudio
+LDFLAGS-client=-lportaudio -lssl -lcrypto  # ssl and crypto needed only for webclient
 CFLAGS-server=-O3 -march=native
 LDFLAGS=-lm -pthread
 CFLAGS=-g -std=gnu99
@@ -20,4 +20,4 @@ server: server.c *.h
 	x86_64-w64-mingw32-gcc $< -o $@ -mthreads -lws2_32 $(LDFLAGS) $(LDFLAGS-client) -Lportaudio -Iportaudio/include
 
 clean:
-	rm -f client server client32.exe client64.exe
+	rm -f client server client32.exe client64.exe webclient webclient32.exe webclient64.exe
