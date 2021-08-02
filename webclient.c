@@ -113,10 +113,13 @@ BIO *openSSLConn(char *host, char *port, char **err) {
 	BIO* bio;
 	SSL* ssl;
 
-	bio = BIO_new_ssl_connect(ctx);
+	//bio = BIO_new_ssl_connect(ctx);
+	bio = BIO_new(BIO_s_connect());
+
 	BIO_set_conn_hostname(bio, host);
 	BIO_set_conn_port(bio, port);
 
+	/*
 	BIO_get_ssl(bio, &ssl);
 	if(!ssl) ERR("Cannot get SSL object from BIO object.");
 
@@ -125,10 +128,12 @@ BIO *openSSLConn(char *host, char *port, char **err) {
 	SSL_set_hostflags(ssl, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
   if (!SSL_set1_host(ssl, host)) ERR("Cannot set hostname for verification.");
   SSL_set_verify(ssl, SSL_VERIFY_PEER, NULL);
+	*/
 
 	// Connect
 	if(BIO_do_connect(bio) <= 0) ERR("Connection failed.");
 
+	/*
 	// Verify existence of server certificate
 	{
 		X509* cert = SSL_get_peer_certificate(ssl);
@@ -138,6 +143,7 @@ BIO *openSSLConn(char *host, char *port, char **err) {
 
 	// Verify the result of chain verification
 	if(SSL_get_verify_result(ssl) != X509_V_OK) ERR("SSL certificate verification failed.");
+	*/
 
 	return bio;
 }
@@ -229,7 +235,7 @@ int main() {
 
 	printf("Starting mini HTTP server on port %d...\n", PORT);
 	printf("INFO: Make request on http://127.0.0.1:%d/ADDR:PORT/PATH\n");
-	printf("INFO: Secure WebSocket connection will be opened to wss://ADDR:PORT/PATH\n");
+	printf("INFO: Secure WebSocket connection will be opened to ws://ADDR:PORT/PATH\n");  // SSL wss://
 	printf("INFO: PATH may contain '?' followed by parameters\n");
 
 	char requestStr[MAX_URL_LEN];
@@ -255,7 +261,7 @@ int main() {
 	char *port = strchr(requestStr, ':');
 	if (port) {
 		*port++ = '\0';
-	} else port = "443";
+	} else port = "80";  // SSL 443
 	char *addr = requestStr + 1;
 
 	printf("Connecting to %s on port %s requesting /%s...\n", addr, port, path);
