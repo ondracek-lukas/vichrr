@@ -71,7 +71,7 @@ int ttyReadKey() {
 		ttyClearStatus();
 		printf("\n");
 		fflush(stdout);
-		exit(130);
+		exit(0);
 	}
 	return c;
 }

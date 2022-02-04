@@ -15,6 +15,10 @@
 #include "tty.h"
 #include "audioIO.h"
 
+#ifndef __WIN32__
+#include "signal.h"
+#endif
+
 struct stereoBuffer outputBuffer;
 PaStream *paInputStream = NULL, *paOutputStream = NULL;
 int inputChannels;
@@ -277,8 +281,15 @@ reconnected:
 	return NULL;
 }
 
+#ifndef __WIN32__
+void sigintHandler(int signum) {
+	exit(0);
+}
+#endif
+
 int main() {
 #ifndef __WIN32__
+	signal(SIGINT, sigintHandler);
 	close(2);
 #endif
 	ttyInit();
@@ -289,10 +300,12 @@ int main() {
 			"    | Virtual Choir Rehearsal Room v" STR(APP_VERSION) ",                                   |\n"
 			"    | created by Lukas Ondracek, use under GNU GPLv3.                      |\n"
 			"    +----------------------------------------------------------------------+\n");
+	fflush(stdout);
 			
 
 	if (Pa_Initialize() != paNoError) {
 		printf("Cannot initialize PortAudio library.\n");
+		fflush(stdout);
 		exit(1);
 	}
 
@@ -309,8 +322,12 @@ int main() {
 			"You may need to allow exclusive mode in your system settings\n"
 			"and set sampling rate of both microphone and headphones to " STR(SAMPLE_RATE) " Hz.\n\n");
 #endif
+	fflush(stdout);
 	sbufferClear(&outputBuffer, 0);
-	aioConnectAudio(&paInputStream, &paOutputStream, false, (PaStreamCallback *) &inputCallback, (PaStreamCallback *) &outputCallback, &inputChannels);
+	if (!aioConnectAudio(&paInputStream, &paOutputStream, false, (PaStreamCallback *) &inputCallback, (PaStreamCallback *) &outputCallback, &inputChannels)) {
+		printf("Cannot connect to any audio device.");
+		exit(2);
+	}
 
 	printf("\n== 2/4 == MEASURE DELAY OF SOUND SYSTEM =======================================\n\n");
 

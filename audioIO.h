@@ -98,6 +98,7 @@ bool aioConnectAudio(PaStream **paInputStream, PaStream **paOutputStream, bool f
 
 	{
 		const PaDeviceInfo *deviceInfo = Pa_GetDeviceInfo(inputIndex);
+		if (!deviceInfo) return false;
 		*inputChannelsPtr = deviceInfo->maxInputChannels;
 		if (*inputChannelsPtr > 2) *inputChannelsPtr = 2; // 1 is sufficient but there were issues with it
 	}

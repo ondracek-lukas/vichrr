@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <pthread.h>
 #include <float.h>
+#include <signal.h>
 
 #include "metronomeRes.h"
 #include "audioBuffer.h"
@@ -659,11 +660,16 @@ void *statusWorker(void *nothing) {
 	return NULL;
 }
 
+void sigintHandler(int signum) {
+	exit(0);
+}
+
 #undef CLIENT_CONNECTED_FIELD
 #define CLIENT_CONNECTED_FIELD connectedMain
 
 #define ERR(...) {msg(__VA_ARGS__); return 1; }
 int main() {
+	signal(SIGINT, sigintHandler);
 	setlinebuf(stdout);
 	usecZero = getUsec(0);
 	netInit();

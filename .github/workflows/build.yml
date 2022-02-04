@@ -1,0 +1,294 @@
+name: Build
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build-server-linux:
+
+    name: Build server-linux
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout the repository
+      uses: actions/checkout@v2
+
+    - name: Build
+      run: |
+        make server
+        mv server server-linux
+
+    - name: Binary info
+      run: |
+        echo "size: $(stat -c%s server-linux) B  sha256sum: $(sha256sum server-linux)"
+        echo "Dependencies:"
+        ldd server-linux | sed -r 's/^\t/  /p' | tee server-linux-deps.txt
+
+    - name: Upload binary as artifact
+      uses: actions/upload-artifact@v2
+      with:
+        name: binaries
+        path: |
+          server-linux
+          server-linux-deps.txt
+        if-no-files-found: error
+
+  test-server-linux:
+
+    name: Test server-linux
+    runs-on: ubuntu-latest
+    needs: build-server-linux
+
+    steps:
+      - name: Download binaries
+        uses: actions/download-artifact@v2
+        with:
+          name: binaries
+
+      - name: Spawn binary
+        run: |
+          chmod +x server-linux
+          timeout --preserve-status -sINT 2 ./server-linux
+
+  build-client-linux:
+
+    name: Build client-linux
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout the repository
+      uses: actions/checkout@v2
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install libportaudio2 portaudio19-dev
+
+    - name: Build
+      run: |
+        make client LDFLAGS-client="-l:libportaudio.a -l:librt.a -lasound -l:libjack.a"
+        mv client client-linux
+
+    - name: Binary info
+      run: |
+        echo "size: $(stat -c%s client-linux) B  sha256sum: $(sha256sum client-linux)"
+        echo "Dependencies:"
+        ldd client-linux | sed -r 's/^\t/  /p' | tee client-linux-deps.txt
+
+
+    - name: Upload binary as artifact
+      uses: actions/upload-artifact@v2
+      with:
+        name: binaries
+        path: |
+          client-linux
+          client-linux-deps.txt
+        if-no-files-found: error
+
+  test-client-linux:
+
+    name: Test client-linux
+    runs-on: ubuntu-latest
+    needs: build-client-linux
+
+    steps:
+      - name: Download binaries
+        uses: actions/download-artifact@v2
+        with:
+          name: binaries
+
+      - name: Spawn binary
+        run: |
+          chmod +x client-linux
+          timeout --preserve-status -sINT 2 ./client-linux || (( $? == 2 ))
+
+  build-client-win:
+
+    name: Build client-win
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout the repository
+      uses: actions/checkout@v2
+
+    - name: Install mingw
+      run: |
+        sudo apt-get update
+        sudo apt-get install gcc-mingw-w64 g++-mingw-w64
+
+#    - name: Install portaudio  # old version
+#      run: |
+#        wget 'https://launchpad.net/~tobydox/+archive/ubuntu/mingw-w64/+files/portaudio-mingw-w64_19.600-20161030-4_all.deb' -O /tmp/portaudio-mingw.deb
+#        wget 'https://raw.githubusercontent.com/PortAudio/portaudio/pa_stable_v190600_20161030/include/pa_win_wasapi.h' -O /tmp/pa_win_wasapi.h
+#        sha256sum -c <<< "
+#          0058f55572c2d569e6f84185315a5d5d17799889e9c0eb7dae3475ff21412751  portaudio-mingw.deb
+#          f63dad9209f7c9bff965c94164527b9597b1ac49e5958bb2b21f89543c0d9f5b  pa_win_wasapi.h"
+#        sudo dpkg -i /tmp/portaudio-mingw.deb
+#        sudo cp pa_win_wasapi.h /usr/i686-w64-mingw32/include/
+#        sudo cp pa_win_wasapi.h /usr/x86_64-w64-mingw32/include/
+
+    - name: Install portaudio
+      run: |
+        git clone 'https://github.com/PortAudio/portaudio'
+        cd portaudio
+        git checkout 'd98346352a87d45e5916020b77f34754ce6d727a' # just for reproducibility, newer version may also work
+        ./configure --host=x86_64-w64-mingw32 --disable-shared --enable-static --with-winapi=wmme,wasapi  # other APIs incl. asio need other libraries
+        make -j8
+        cd ..
+
+    - name: Build
+      run: |
+        make client64.exe LDFLAGS="-Wl,-Bstatic -lpthread -lportaudio -Wl,-Bdynamic -lole32 -lwinmm -Lportaudio/lib/.libs" CFLAGS=-Iportaudio/include
+        mv client64.exe client-win.exe
+
+    - name: Binary info
+      run: |
+        echo "size: $(stat -c%s client-win.exe) B  sha256sum: $(sha256sum client-win.exe)"
+        echo "Dependencies:"
+        objdump -p client-win.exe | sed -nr 's/^\tDLL Name: /  /p' | tee client-win-deps.txt
+
+    - name: Upload binary as artifact
+      uses: actions/upload-artifact@v2
+      with:
+        name: binaries
+        path: |
+          client-win.exe
+          client-win-deps.txt
+        if-no-files-found: error
+
+  test-client-win:
+
+    name: Test client-win
+    runs-on: windows-latest
+    needs: build-client-win
+
+    steps:
+      - name: Download binaries
+        uses: actions/download-artifact@v2
+        with:
+          name: binaries
+
+      - name: Spawn binary
+        shell: bash
+        run: |
+          timeout --preserve-status -k3 2 ./client-win.exe || (( $? == 2 ))
+
+  build-client-mac:
+
+    name: Build client-mac
+    runs-on: macos-latest
+
+    steps:
+    - name: Checkout the repository
+      uses: actions/checkout@v2
+
+    - name: Install portaudio
+      run: |
+        brew update
+        brew install portaudio
+
+    - name: Build
+      run: |
+        make client CC=gcc-11 LDFLAGS-client="-static-libgcc -framework CoreAudio -framework AudioToolbox -framework AudioUnit -framework CoreServices -framework CoreFoundation /usr/local/Cellar/portaudio/19.7.0/lib/libportaudio.a" CFLAGS="-I/usr/local/Cellar/portaudio/19.7.0/include/"
+        mv client client-mac
+
+    - name: Binary info
+      run: |
+        echo "size: $(stat -f%z client-mac) B  sha256sum: $(shasum -a 256 client-mac)"
+        echo "Dependencies:"
+        otool -L client-mac | sed -nr 's/^\t/  /p' | tee client-mac-deps.txt
+
+    - name: Upload binary as artifact
+      uses: actions/upload-artifact@v2
+      with:
+        name: binaries
+        path: |
+          client-mac
+          client-mac-deps.txt
+        if-no-files-found: error
+
+  test-client-mac:
+
+    name: Test client-mac
+    runs-on: macos-latest
+    needs: build-client-mac
+
+    steps:
+      - name: Download binaries
+        uses: actions/download-artifact@v2
+        with:
+          name: binaries
+
+      - name: Spawn binary
+        shell: bash
+        run: |
+          chmod +x client-mac
+          #gtimeout --preserve-status -sINT 2 ./client-mac || (( $? == 2 ))
+          ./client-mac </dev/null & sleep 1; kill -INT $! || true; wait $!
+
+  check-dependencies:
+
+    name: Check dependencies
+    runs-on: ubuntu-latest
+    needs:
+      - build-server-linux
+      - build-client-linux
+      - build-client-win
+      - build-client-mac
+
+    steps:
+      - name: Download binaries and lists of their dependencies
+        uses: actions/download-artifact@v2
+        with:
+          name: binaries
+
+      - name: Check server-linux dependencies
+        shell: bash
+        run: |
+          diff - <(sed -r 's/^\s*(\S*).*/\1/' < server-linux-deps.txt | sort | uniq) <<EOF
+          /lib64/ld-linux-x86-64.so.2
+          libc.so.6
+          libm.so.6
+          libpthread.so.0
+          linux-vdso.so.1
+          EOF
+
+      - name: Check client-linux dependencies
+        shell: bash
+        run: |
+          diff - <(sed -r 's/^\s*(\S*).*/\1/' < client-linux-deps.txt | sort | uniq) <<EOF
+          /lib64/ld-linux-x86-64.so.2
+          libasound.so.2
+          libc.so.6
+          libdl.so.2
+          libm.so.6
+          libpthread.so.0
+          linux-vdso.so.1
+          EOF
+
+      - name: Check client-win dependencies
+        shell: bash
+        run: |
+          diff - <(sed -r 's/^\s*(\S*).*/\1/' < client-win-deps.txt | sort | uniq) <<EOF
+          KERNEL32.dll
+          WINMM.dll
+          WS2_32.dll
+          msvcrt.dll
+          ole32.dll
+          EOF
+
+      - name: Check client-mac dependencies
+        shell: bash
+        run: |
+          diff - <(sed -r 's/^\s*(\S*).*/\1/' < client-mac-deps.txt | sort | uniq) <<EOF
+          /System/Library/Frameworks/AudioToolbox.framework/Versions/A/AudioToolbox
+          /System/Library/Frameworks/AudioUnit.framework/Versions/A/AudioUnit
+          /System/Library/Frameworks/CoreAudio.framework/Versions/A/CoreAudio
+          /System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation
+          /System/Library/Frameworks/CoreServices.framework/Versions/A/CoreServices
+          /usr/lib/libSystem.B.dylib
+          EOF
+
