@@ -179,7 +179,7 @@ jobs:
   build-client-mac:
 
     name: Build client-mac
-    runs-on: macos-latest
+    runs-on: macos-10.15
 
     steps:
     - name: Checkout the repository
@@ -192,14 +192,55 @@ jobs:
 
     - name: Build
       run: |
-        make client CC=gcc-11 LDFLAGS-client="-static-libgcc -framework CoreAudio -framework AudioToolbox -framework AudioUnit -framework CoreServices -framework CoreFoundation /usr/local/Cellar/portaudio/19.7.0/lib/libportaudio.a" CFLAGS="-I/usr/local/Cellar/portaudio/19.7.0/include/"
+        make client CFLAGS=-mmacosx-version-min=10.9
         mv client client-mac
 
-    - name: Binary info
+    - name: Binary info with shared dependencies
       run: |
         echo "size: $(stat -f%z client-mac) B  sha256sum: $(shasum -a 256 client-mac)"
         echo "Dependencies:"
-        otool -L client-mac | sed -nr 's/^\t/  /p' | tee client-mac-deps.txt
+        otool -L client-mac | sed -n 's/^\t/  /p'
+
+    - name: Install dylibbundler
+      run: brew install dylibbundler
+
+    - name: Create bundle
+      shell: bash
+      run: |
+        mkdir -p client-mac.app/Contents/MacOS
+        cp client-mac client-mac.app/Contents/MacOS
+        cat > client-mac.app/Contents/Info.plist << EOF
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+          <key>CFBundleName</key>
+          <string>Virtual Choir Rehearsal Room</string>
+          <key>CFBundleIdentifier</key>
+          <string>cz.ondrac.virtual-choir-rehearsal-room</string>
+          <key>CFBundleExecutable</key>
+          <string>client-mac.sh</string>
+          <key>CFBundlePackageType</key>
+          <string>APPL</string>
+        </dict>
+        </plist>
+        EOF
+        cat > client-mac.app/Contents/MacOS/client-mac.sh << 'EOF'
+        #!/bin/sh
+        open -a Terminal "${0%%.sh}"
+        EOF
+        chmod +x client-mac.app/Contents/MacOS/client-mac.sh
+        dylibbundler -od -b -x ./client-mac.app/Contents/MacOS/client-mac -d ./client-mac.app/Contents/libs/ -p @executable_path/../libs/
+
+    - name: Binary info with bundled dependencies
+      run: |
+        echo "size: $(stat -f%z ./client-mac.app/Contents/MacOS/client-mac) B  sha256sum: $(shasum -a 256 ./client-mac.app/Contents/MacOS/client-mac)"
+        echo "Dependencies:"
+        otool -L ./client-mac.app/Contents/MacOS/client-mac | sed -n $'s/^\t/  /p' | tee client-mac-deps.txt
+
+    - name: Create dmg image
+      run: |
+        hdiutil create -srcfolder client-mac.app client-mac.dmg
 
     - name: Upload binary as artifact
       uses: actions/upload-artifact@v2
@@ -208,6 +249,7 @@ jobs:
         path: |
           client-mac
           client-mac-deps.txt
+          client-mac.dmg
         if-no-files-found: error
 
   test-client-mac:
@@ -222,12 +264,14 @@ jobs:
         with:
           name: binaries
 
+      - name: Attach dmg image
+        run: hdiutil attach client-mac.dmg
+
       - name: Spawn binary
         shell: bash
         run: |
-          chmod +x client-mac
+          /Volumes/client-mac/client-mac.app/Contents/MacOS/client-mac </dev/null & sleep 3; kill -INT $! || true; wait $!
           #gtimeout --preserve-status -sINT 2 ./client-mac || (( $? == 2 ))
-          ./client-mac </dev/null & sleep 1; kill -INT $! || true; wait $!
 
   check-dependencies:
 
@@ -284,11 +328,7 @@ jobs:
         shell: bash
         run: |
           diff - <(sed -r 's/^\s*(\S*).*/\1/' < client-mac-deps.txt | sort | uniq) <<EOF
-          /System/Library/Frameworks/AudioToolbox.framework/Versions/A/AudioToolbox
-          /System/Library/Frameworks/AudioUnit.framework/Versions/A/AudioUnit
-          /System/Library/Frameworks/CoreAudio.framework/Versions/A/CoreAudio
-          /System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation
-          /System/Library/Frameworks/CoreServices.framework/Versions/A/CoreServices
           /usr/lib/libSystem.B.dylib
+          @executable_path/../libs/libportaudio.2.dylib
           EOF
 
