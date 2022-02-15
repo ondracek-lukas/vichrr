@@ -106,8 +106,7 @@ bool threadPriorityRealtime(uint32_t priority) {
 
 bool threadPriorityNice(uint32_t inc) {
 	errno = 0;
-	nice(inc);
-	if (errno == 0) {
+	if ((nice(inc) != -1) || (errno == 0)) {
 		return true;
 	} else {
 		printf("Cannot increase nice level of thread.\n");

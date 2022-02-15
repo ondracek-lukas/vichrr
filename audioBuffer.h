@@ -22,7 +22,8 @@
 struct audioBuffer {
 	bindex_t readPos;       // to be read
 	bindex_t writeLastPos;  // farest already written
-	bindex_t skipCondDur;
+	bindex_t readTime;      // number of bufferReadNext calls
+	bindex_t lastJumpTime;  // readTime of last discontinuity
 	double statAvgSq;
 	double statMaxSq;
 	bool statClear;
@@ -32,11 +33,9 @@ struct audioBuffer {
 	size_t srvStatSkip;
 	size_t srvStatLost;
 	size_t srvStatPlay;
-	bindex_t nullReads;
+	int nullReads;
 	sample_t tmpBlock[BLOCK_SIZE];
-	enum {
-		BLOCK_EMPTY, BLOCK_USED
-	} blockState[BUFFER_BLOCKS];
+	bindex_t blockTime[BUFFER_BLOCKS];    // readTime when written; block empty iff 0
 	sample_t data[BUFFER_BLOCKS * BLOCK_SIZE];
 };
 
@@ -47,15 +46,16 @@ float bufferFade(int index) {
 
 void bufferClear(struct audioBuffer *buf, bindex_t readPos) {
 	buf->readPos = readPos;
+	buf->readTime = 1;
+	buf->lastJumpTime = 0;
 	buf->writeLastPos = 0;
-	buf->skipCondDur = 0;
 	buf->fade = true;
 	buf->nullReads = 0;
 	buf->statAvgSq = 0;
 	buf->statMaxSq = 0;
 	buf->statClear = false;
 	for (int i = 0; i < BUFFER_BLOCKS; i++) {
-		buf->blockState[i] = BLOCK_EMPTY;
+		buf->blockTime[i] = 0;
 	}
 	buf->srvStatWait = 0;
 	buf->srvStatSkip = 0;
@@ -68,7 +68,7 @@ sample_t *bufferRead(struct audioBuffer *buf, bindex_t pos, bool fadeIn, bool fa
 
 	if ((fadeIn && fadeOut) ||
 			(pos + BUFFER_BLOCKS <= buf->writeLastPos) || (pos > buf->writeLastPos) ||
-			(buf->blockState[pos % BUFFER_BLOCKS] != BLOCK_USED)) {
+			(!buf->blockTime[pos % BUFFER_BLOCKS])) {
 		retData = buf->tmpBlock;
 		memset(retData, 0, BLOCK_SIZE * sizeof(sample_t));
 		return retData;
@@ -95,8 +95,10 @@ sample_t *bufferRead(struct audioBuffer *buf, bindex_t pos, bool fadeIn, bool fa
 // low-latency reading
 sample_t *bufferReadNext(struct audioBuffer *buf) {
 	__sync_synchronize();
+	bindex_t readTime = ++buf->readTime;
 	bindex_t writeLastPos = buf->writeLastPos;
 	bindex_t readPos = buf->readPos;
+	__sync_synchronize();
 
 	if (readPos + BUFFER_BLOCKS <= writeLastPos) {
 		// writing occurred too far apart reading, this shouldn't happen
@@ -107,51 +109,50 @@ sample_t *bufferReadNext(struct audioBuffer *buf) {
 #endif
 	}
 
-	// propose skipping part of the stream if latency is too high
-	int propSkip = 0;
-	if (writeLastPos >= readPos + 4) {
-		propSkip = (writeLastPos - readPos) / 4;
-		int misses = 0;
-		int i = 0;
-		for (; i < propSkip; i++) {
-			misses += (buf->blockState[(readPos + i) % BUFFER_BLOCKS] == BLOCK_EMPTY);
-			if (misses > propSkip/4) break;
+	// check whether to skip some data (to lower delay)
+	int skip = 0;
+	if (buf->lastJumpTime + BUFFER_DES_JUMP_PERIOD <= buf->readTime) {
+		skip = writeLastPos - readPos - 1;
+		int seenBlocks = 0;
+		for (bindex_t i = writeLastPos; (skip > 0) && (i + BUFFER_DES_JUMP_PERIOD > readPos) && (i > 0); i--) {
+			if (buf->blockTime[i % BUFFER_BLOCKS]) {
+				int val = i - readPos + readTime - buf->blockTime[i % BUFFER_BLOCKS] - 2; // skip allowed by i-th block
+				if (skip > val) {
+					skip = val;
+				}
+				seenBlocks++;
+			}
+			if ((i + BUFFER_DES_JUMP_PERIOD <= readPos + skip) && (seenBlocks >= BUFFER_DES_JUMP_PERIOD)) break;
 		}
-		if (i == propSkip) {
-			for (; (i < propSkip * 2 + 1) && (misses >= 0); i++) {
-				misses -= (buf->blockState[(readPos + i) % BUFFER_BLOCKS] == BLOCK_EMPTY);
-			}
-			if (misses < 0) {
-				propSkip = 0;
-			}
+		if ((skip <= 0) || !buf->blockTime[(readPos + skip) % BUFFER_BLOCKS] || !buf->blockTime[(readPos + skip + 1) % BUFFER_BLOCKS]) skip = 0;
+	}
+
+	bool curUsed = (readPos <= buf->writeLastPos) && (buf->blockTime[readPos % BUFFER_BLOCKS]);
+
+	// insert one empty block if this one arrived just on time and so previous was faded
+	if (buf->nullReads == -1) {
+		if (curUsed && !skip) {
+			curUsed = false;
 		} else {
-			propSkip = 0;
+			buf->nullReads = 0;
 		}
 	}
-
-	// perform proposed skipping only if the preconditions last longer time
-	bool skip = false;
-	if (propSkip && (++buf->skipCondDur >= SAMPLE_RATE / MONO_BLOCK_SIZE * BUFFER_SKIP_DELAY_SEC)) {
-		skip = true;
-	} else if (!propSkip) {
-		buf->skipCondDur = 0;
-	}
-
-
-	bool curUsed = (readPos <= buf->writeLastPos) && (buf->blockState[readPos % BUFFER_BLOCKS] == BLOCK_USED);
 
 	// check whether we are waiting too long for a packet, so it can be missed and should be skiped
 	if (!curUsed && !skip) {
 		bool used = false;
 		for (int i = 0; i <= buf->nullReads; i++) {
 			if (readPos + i + 1 > buf->writeLastPos) break;
-			bool nextUsed = (buf->blockState[(readPos + i + 1) % BUFFER_BLOCKS] == BLOCK_USED);
+			bool nextUsed = (buf->blockTime[(readPos + i + 1) % BUFFER_BLOCKS]);
 			if (used && nextUsed) {
 				readPos += i;
 				buf->readPos = readPos;
 				curUsed = true;
 				buf->srvStatLost += i;
 				buf->nullReads -= i;
+				if (buf->nullReads) {
+					buf->lastJumpTime = buf->readTime;
+				}
 #ifdef DEBUG_BUFFER_VERBOSE
 				printf("lost %d, readPos %d, writePos %d\n", i, readPos, buf->writeLastPos);
 #endif
@@ -161,7 +162,7 @@ sample_t *bufferReadNext(struct audioBuffer *buf) {
 		}
 	}
 
-	bool fadeOut = skip || (buf->blockState[(readPos + 1) % BUFFER_BLOCKS] == BLOCK_EMPTY);
+	bool fadeOut = skip || (!buf->blockTime[(readPos + 1) % BUFFER_BLOCKS]);
 
 	sample_t *retData = NULL;
 	if (curUsed && (!fadeOut || !buf->fade)) {
@@ -182,6 +183,8 @@ sample_t *bufferReadNext(struct audioBuffer *buf) {
 #endif
 		buf->nullReads = 0;
 
+		if (fadeOut && !skip) buf->nullReads = -1; // special value; insert one empty block if the following will arrive on time
+
 	} else {
 
 		// we are waiting for some data, nothing is returned
@@ -190,13 +193,13 @@ sample_t *bufferReadNext(struct audioBuffer *buf) {
 		buf->nullReads++;
 
 #ifdef DEBUG_BUFFER_VERBOSE
-		if (buf->nullReads % 100 == 0) {
+		if ((buf->nullReads % 100 == 0) && (buf->nullReads != 0)) {
 			size_t readPos = buf->readPos;
 			size_t writePos = buf->writeLastPos;
 			printf("read %d, write %d\n", readPos, writePos);
 			if (readPos > 0) {
 				for (size_t i = writePos; i >= readPos; i--) {
-					printf("%d", buf->blockState[i % BUFFER_BLOCKS] == BLOCK_USED);
+					printf("%d", buf->blockTime[i % BUFFER_BLOCKS]);
 				}
 				printf("\n");
 			}
@@ -208,14 +211,14 @@ sample_t *bufferReadNext(struct audioBuffer *buf) {
 
 		// after block being returned, part of the stream will be skipped
 		readPos = buf->readPos;
-		buf->readPos = readPos + propSkip;
-		buf->skipCondDur = 0;
+		buf->readPos = readPos + skip;
+		buf->lastJumpTime = readTime;
 		buf->srvStatWait += buf->nullReads;
 #ifdef DEBUG_BUFFER_VERBOSE
-		printf("skip %d + wait %d, readPos %d, writePos %d\n", propSkip, buf->nullReads, buf->readPos, buf->writeLastPos);
+		printf("skip %d + wait %d, readPos %d, writePos %d\n", skip, buf->nullReads, buf->readPos, buf->writeLastPos);
 #endif
 		buf->nullReads = 0;
-		buf->srvStatSkip += propSkip;
+		buf->srvStatSkip += skip;
 
 	}
 
@@ -245,7 +248,7 @@ sample_t *bufferReadNext(struct audioBuffer *buf) {
 bool bufferWrite(struct audioBuffer *buf, bindex_t pos, const sample_t *data, bool add) { // TODO fadeIn, fadeOut
 	if (buf->writeLastPos < pos) {
 		do {
-			buf->blockState[++buf->writeLastPos % BUFFER_BLOCKS] = BLOCK_EMPTY;
+			buf->blockTime[++buf->writeLastPos % BUFFER_BLOCKS] = 0;
 		} while (buf->writeLastPos < pos);
 		__sync_synchronize();
 	}
@@ -254,7 +257,7 @@ bool bufferWrite(struct audioBuffer *buf, bindex_t pos, const sample_t *data, bo
 		return false;
 	}
 
-	if (!add || (buf->blockState[pos % BUFFER_BLOCKS] == BLOCK_EMPTY)) {
+	if (!add || (!buf->blockTime[pos % BUFFER_BLOCKS])) {
 		memcpy(buf->data + (pos % BUFFER_BLOCKS) * BLOCK_SIZE, data, BLOCK_SIZE * sizeof(sample_t));
 	} else {
 		sample_t *block = buf->data + (pos % BUFFER_BLOCKS) * BLOCK_SIZE;
@@ -264,7 +267,7 @@ bool bufferWrite(struct audioBuffer *buf, bindex_t pos, const sample_t *data, bo
 	}
 
 	__sync_synchronize();
-	buf->blockState[pos % BUFFER_BLOCKS] = BLOCK_USED;
+	buf->blockTime[pos % BUFFER_BLOCKS] = buf->readTime;
 
 	return true;
 }

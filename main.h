@@ -3,12 +3,13 @@
 #define _GNU_SOURCE
 
 #define PROT_VERSION              4
-#define APP_VERSION             1.2
+#define APP_VERSION             1.3
 #define UDP_PORT              64199
 #define NAME_LEN                 10
 #define MAX_CLIENTS             100
 #define BLOCKS_PER_STAT          50
 #define BLOCKS_PER_SRV_STAT    2000  // should be divisible by BLOCKS_PER_STAT
+#define CONN_TIMEOUT_MSEC      2000  // ms
 
 #define CLIENT_SOCK_BUF_SIZE 100000 // B
 // #define SERVER_SCHED_DEADLINE
@@ -17,7 +18,7 @@
 #define MONO_BLOCK_SIZE         128  // 2.667 ms
 #define BUFFER_BLOCKS          4096  // 10.92 s, ~1 MB mono, ~2 MB stereo
 #define STEREO_BLOCK_SIZE (2 * MONO_BLOCK_SIZE)
-#define BUFFER_SKIP_DELAY_SEC     2  // latency is lowered only if possible for this duration
+#define BUFFER_DES_JUMP_PERIOD 1500  // blocks, 5s; desired minimal period between jumps in stream
 
 
 #define STAT_HALFLIFE_MSEC      100

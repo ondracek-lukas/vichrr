@@ -204,11 +204,11 @@ int netOpenConn(char *addr, char *port) {
 	}
 
 #ifdef __WIN32__
-	DWORD tv = 1000;
+	DWORD tv = CONN_TIMEOUT_MSEC;
 #else
 	struct timeval tv;
-	tv.tv_sec = 1;
-	tv.tv_usec = 0;
+	tv.tv_sec = CONN_TIMEOUT_MSEC / 1000;
+	tv.tv_usec = CONN_TIMEOUT_MSEC % 1000 * 1000;
 #endif
 	if (setsockopt(sfd, SOL_SOCKET, SO_RCVTIMEO, (void *) &tv,sizeof(tv)) < 0) {
 			printf("Error while setting timeout of socket: %s (%d)\n", strerror(errno), errno);

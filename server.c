@@ -129,7 +129,7 @@ void clientsSurroundReinit() {
 
 	size_t i = 0;
 	FOR_CLIENTS_ORDERED(client) {
-		surroundInitCtx(&client->surroundCtx, client->dBAdj, M_PI * ((float)i++ / (clientsCnt-1 + 1e-20) - 0.5f), 2);
+		surroundInitCtx(&client->surroundCtx, client->dBAdj, M_PI * (((float)i++ + 1e-20) / (clientsCnt-1 + 2e-20) - 0.5f), 2);
 	}
 }
 
@@ -881,7 +881,7 @@ int main() {
 		usecLoadMax = (usecLoadMax < usecLoad ? usecLoad : usecLoadMax);
 
 		FOR_CLIENTS(client) {
-			if (usec - client->lastPacketUsec > 1000000) {
+			if (usec - client->lastPacketUsec > CONN_TIMEOUT_MSEC * 1000) {
 				client->connected = false;
 				client->connectedMain = false;
 				msg("Client %d '%s' timeout, disconnected...", client->id, client->name);

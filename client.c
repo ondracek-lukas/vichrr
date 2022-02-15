@@ -61,7 +61,7 @@ int outputCallback(const sample_t *input, sample_t *output, unsigned long frameC
 	sample_t *blockStereo;
 	__sync_synchronize();
 	if (frameCount != MONO_BLOCK_SIZE) {
-		printf("Error: Wrong output frameCount %d\n", frameCount);
+		printf("Error: Wrong output frameCount %ld\n", frameCount);
 		exit(1);
 	}
 	if ((outputMode == OUTPUT_NULL) || (outputMode == OUTPUT_END)) {
@@ -103,7 +103,7 @@ int inputCallback(const sample_t *blockOrig, const sample_t *output, unsigned lo
 	sample_t *blockMono = packet.block;
 
 	if (frameCount != MONO_BLOCK_SIZE) {
-		printf("Error: Wrong input frameCount %d\n", frameCount);
+		printf("Error: Wrong input frameCount %ld\n", frameCount);
 		exit(1);
 	}
 

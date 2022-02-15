@@ -124,7 +124,7 @@ void ttyDiscardLineEnd() {
 int ttyPromptInt(char *prompt) {
 	printf("%s: ", prompt);
 	int ret;
-	scanf("%d", &ret);
+	if (scanf("%d", &ret) != 1) ret = 0;
 	ttyDiscardLineEnd();
 	return ret;
 }
@@ -132,7 +132,7 @@ int ttyPromptInt(char *prompt) {
 double ttyPromptDouble(char *prompt) {
 	printf("%s: ", prompt);
 	double ret;
-	scanf("%lf", &ret);
+	if (scanf("%lf", &ret) != 1) ret = 0;
 	ttyDiscardLineEnd();
 	return ret;
 }
@@ -140,7 +140,7 @@ double ttyPromptDouble(char *prompt) {
 float ttyPromptFloat(char *prompt) {
 	printf("%s: ", prompt);
 	float ret;
-	scanf("%f", &ret);
+	if (scanf("%f", &ret) != 1) ret = 0;
 	ttyDiscardLineEnd();
 	return ret;
 }

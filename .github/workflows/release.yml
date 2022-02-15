@@ -30,7 +30,6 @@ jobs:
         test -f client-win.exe
         test -f client-mac.dmg
         test -f server-linux
-        test -f .github/install-mac.sh
         test -f .github/release-notes.md
 
     - name: Create Release
@@ -73,16 +72,6 @@ jobs:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
         asset_path: ./client-mac.dmg
         asset_name: virtual-choir-rehearsal-room-v${{ github.ref_name }}-mac.dmg
-        asset_content_type: application/octet-stream
-
-    - name: Upload install-mac.sh
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./.github/install-mac.sh
-        asset_name: install-mac.sh
         asset_content_type: application/octet-stream
 
     - name: Upload server-linux
