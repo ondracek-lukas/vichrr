@@ -15,6 +15,4 @@ For more information about the application see [its webpage][web].
 Changes
 -------
 
-* More aggresive latency reduction
-* Connection timeout incresed to 2s
-* Other minor fixes
+* GUI, but not working yet

@@ -2,56 +2,56 @@ name: Build
 
 on:
   push:
-    branches: [ master ]
+    branches: [ master, cpp-gui-dev ]
   pull_request:
     branches: [ master ]
 
 jobs:
-  build-server-linux:
+  #  build-server-linux:
+  #
+  #    name: Build server-linux
+  #    runs-on: ubuntu-latest
+  #
+  #    steps:
+  #    - name: Checkout the repository
+  #      uses: actions/checkout@v2
+  #
+  #    - name: Build
+  #      run: |
+  #        make server
+  #        mv server server-linux
+  #
+  #    - name: Binary info
+  #      run: |
+  #        echo "size: $(stat -c%s server-linux) B  sha256sum: $(sha256sum server-linux)"
+  #        echo "Dependencies:"
+  #        ldd server-linux | sed -r 's/^\t/  /p' | tee server-linux-deps.txt
+  #
+  #    - name: Upload binary as artifact
+  #      uses: actions/upload-artifact@v2
+  #      with:
+  #        name: binaries
+  #        path: |
+  #          server-linux
+  #          server-linux-deps.txt
+  #        if-no-files-found: error
 
-    name: Build server-linux
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Checkout the repository
-      uses: actions/checkout@v2
-
-    - name: Build
-      run: |
-        make server
-        mv server server-linux
-
-    - name: Binary info
-      run: |
-        echo "size: $(stat -c%s server-linux) B  sha256sum: $(sha256sum server-linux)"
-        echo "Dependencies:"
-        ldd server-linux | sed -r 's/^\t/  /p' | tee server-linux-deps.txt
-
-    - name: Upload binary as artifact
-      uses: actions/upload-artifact@v2
-      with:
-        name: binaries
-        path: |
-          server-linux
-          server-linux-deps.txt
-        if-no-files-found: error
-
-  test-server-linux:
-
-    name: Test server-linux
-    runs-on: ubuntu-latest
-    needs: build-server-linux
-
-    steps:
-      - name: Download binaries
-        uses: actions/download-artifact@v2
-        with:
-          name: binaries
-
-      - name: Spawn binary
-        run: |
-          chmod +x server-linux
-          timeout --preserve-status -sINT 2 ./server-linux
+  #  test-server-linux:
+  #
+  #    name: Test server-linux
+  #    runs-on: ubuntu-latest
+  #    needs: build-server-linux
+  #
+  #    steps:
+  #      - name: Download binaries
+  #        uses: actions/download-artifact@v2
+  #        with:
+  #          name: binaries
+  #
+  #      - name: Spawn binary
+  #        run: |
+  #          chmod +x server-linux
+  #          timeout --preserve-status -sINT 2 ./server-linux
 
   build-client-linux:
 
@@ -65,11 +65,12 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install libportaudio2 portaudio19-dev
+        sudo apt-get install libportaudio2 portaudio19-dev libwxgtk3.0-dev
 
     - name: Build
       run: |
-        make client LDFLAGS-client="-l:libportaudio.a -l:librt.a -lasound -l:libjack.a"
+        wx-config --list
+        make client FLAGS-client="-l:libportaudio.a -l:librt.a -lasound -l:libjack.a `wx-config --libs` `wx-config --cxxflags`"
         mv client client-linux
 
     - name: Binary info
@@ -119,6 +120,13 @@ jobs:
         sudo apt-get update
         sudo apt-get install gcc-mingw-w64 g++-mingw-w64
 
+    - name: Install wxWidgets
+      run:
+        wget 'https://github.com/GrandOrgue/WxWidgetsCross/releases/download/3.1.5-2.go/wxwidgets3.0-mingw-w64_3.1.5-2.go_all.deb'
+        sha256sum -c <<< "
+          2ee66b6b96cf98b8866bb8ed856bb53c1cc1b84693e7b187184d2e8324bf3284  wxwidgets3.0-mingw-w64_3.1.5-2.go_all.deb"
+        sudo dpkg -i wxwidgets3.0-mingw-w64_3.1.5-2.go_all.deb
+
 #    - name: Install portaudio  # old version
 #      run: |
 #        wget 'https://launchpad.net/~tobydox/+archive/ubuntu/mingw-w64/+files/portaudio-mingw-w64_19.600-20161030-4_all.deb' -O /tmp/portaudio-mingw.deb
@@ -141,8 +149,8 @@ jobs:
 
     - name: Build
       run: |
-        make client64.exe LDFLAGS="-Wl,-Bstatic -lpthread -lportaudio -Wl,-Bdynamic -lole32 -lwinmm -Lportaudio/lib/.libs" CFLAGS=-Iportaudio/include
-        mv client64.exe client-win.exe
+        make client.exe FLAGS-client-exe="-lm -mthreads -Wl,-Bstatic -lpthread -lportaudio -Wl,-Bdynamic -lole32 -lwinmm -Lportaudio/lib/.libs -Iportaudio/include"
+        mv client.exe client-win.exe
 
     - name: Binary info
       run: |
@@ -185,21 +193,14 @@ jobs:
     - name: Checkout the repository
       uses: actions/checkout@v2
 
-    - name: Install portaudio
+    - name: Install portaudio and wxWidgets
       run: |
         brew update
-        brew install portaudio
+        brew install portaudio wxwidgets
 
     - name: Build
       run: |
-        #make client CFLAGS=-mmacosx-version-min=10.9 LDFLAGS-client="-lSystem.B /usr/local/Cellar/portaudio/*/lib/libportaudio.a"
-        make client LDFLAGS-client="-framework CoreAudio -framework AudioToolbox -framework AudioUnit -framework CoreServices -framework CoreFoundation /usr/local/Cellar/portaudio/*/lib/libportaudio.a"
-        #        /System/Library/Frameworks/CoreAudio.framework/Versions/A/CoreAudio
-        #        /System/Library/Frameworks/AudioToolbox.framework/Versions/A/AutdioToolbox
-        #        /System/Library/Frameworks/AudioUnit.framework/Versions/A/AudioUnit
-        #        /System/Library/Frameworks/CoreServices.framework/Versions/A/CoreServices
-        #        /System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation
-
+        make client FLAGS-client="-framework CoreAudio -framework AudioToolbox -framework AudioUnit -framework CoreServices -framework CoreFoundation /usr/local/Cellar/portaudio/*/lib/libportaudio.a `wx-config --libs` `wx-config --cxxflags`"
         mv client client-mac
 
     - name: Binary info

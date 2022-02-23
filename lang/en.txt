@@ -1,0 +1,68 @@
+# testing
+Several testing sentences. Several testing sentences. Several testing sentences. Several testing sentences. Several testing sentences. Several testing sentences. Several testing sentences.
+Second line.
+
+# lab_mic
+Microphone:
+
+# lab_head
+Headphones:
+
+# lab_dev_lat
+Device latency:
+
+# lab_mic_vol
+Microphone volume:
+
+# lab_server
+Server address:
+
+# lab_nickname
+Your name:
+
+# lab_system
+System level
+
+# btn_calibrate
+Calibrate
+
+# btn_apply
+Apply
+
+# btn_connect
+Connect
+
+# btn_measure_lat
+Measure
+
+# info_audio_devices
+Choose which of your audio devices should be used and click on Apply.
+
+The lists are <b>grouped by interfaces </b>through which devices are accessed.
+The same device may be present in multiple groups
+and the chosen interface affects latency.
+
+# info_audio_devices:win
+
+On Windows, the lowest-latency interface is usually WASAPI in exclusive mode (~30ms);
+playing sounds from other applications will be forbidden until this application is closed.
+(Even lower latency might be achieved by ASIO drivers, which was not tested yet.)
+
+# info_audio_devices:linux
+
+XXX
+Some info about Linux devices.
+
+
+# info_lat_measurement
+Several
+lines
+about
+device latency.
+
+
+# info_mic_calibration
+XXX
+
+# info_server
+XXX
