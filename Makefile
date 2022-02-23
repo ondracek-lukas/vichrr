@@ -1,8 +1,9 @@
 # Virtual Choir Rehearsal Room  Copyright (C) 2020  Lukas Ondracek <ondracek.lukas@gmail.com>, use under GNU GPLv3
 
-FLAGS-client=`wx-config --libs` `wx-config --cxxflags` -lportaudio
-FLAGS-client-exe=-lm -mthreads -lws2_32 -lportaudio
+FLAGS-client=-std=c++17 `wx-config --libs` `wx-config --cxxflags` -lportaudio
+FLAGS-client-exe=-std=c++17 -lm -mthreads -lws2_32 -lportaudio
 FLAGS-server=-O3 -march=native
+CFLAGS=-std=c++17
 
 override LDFLAGS += -lm -pthread
 

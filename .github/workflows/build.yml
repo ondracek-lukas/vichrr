@@ -70,7 +70,7 @@ jobs:
     - name: Build
       run: |
         wx-config --list
-        make client FLAGS-client="-l:libportaudio.a -l:librt.a -lasound -l:libjack.a `wx-config --libs` `wx-config --cxxflags`"
+        make client FLAGS-client="-l:libportaudio.a -l:librt.a -lasound -l:libjack.a `wx-config --libs --cxxflags --static=yes`"
         mv client client-linux
 
     - name: Binary info
@@ -149,7 +149,7 @@ jobs:
 
     - name: Build
       run: |
-        make client.exe FLAGS-client-exe="-lm -mthreads -Wl,-Bstatic -lpthread -lportaudio -Wl,-Bdynamic -lole32 -lwinmm -Lportaudio/lib/.libs -Iportaudio/include"
+        make client.exe FLAGS-client-exe="-std=c++17 -lm -mthreads -Wl,-Bstatic -lpthread -lportaudio -Wl,-Bdynamic -lole32 -lwinmm -Lportaudio/lib/.libs -Iportaudio/include -I/usr/x86_64-w64-mingw32/include/wx-3.1/"
         mv client.exe client-win.exe
 
     - name: Binary info
