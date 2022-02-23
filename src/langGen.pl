@@ -91,7 +91,7 @@ print q(
 const char **LANG = LANG_EN;
 void langInit(wxString name) {
 );
-print qq{\tif (name.StartsWith("$_")) LANG = LANG_} . uc($_) . ";\n" for sort keys %{%data{"linux"}};
+print qq{\tif (name.StartsWith("$_")) LANG = LANG_} . uc($_) . ";\n" for sort keys %{$data{"linux"}};
 print "}\n";
 
 print "#define STR(name) wxString::FromUTF8(LANG[LANG_STR_NAME::name])";
