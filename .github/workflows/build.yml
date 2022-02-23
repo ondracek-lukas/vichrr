@@ -288,7 +288,7 @@ jobs:
     name: Check dependencies
     runs-on: ubuntu-latest
     needs:
-      - build-server-linux
+      #- build-server-linux
       - build-client-linux
       - build-client-win
       - build-client-mac
@@ -298,17 +298,6 @@ jobs:
         uses: actions/download-artifact@v2
         with:
           name: binaries
-
-      - name: Check server-linux dependencies
-        shell: bash
-        run: |
-          diff - <(sed -r 's/^\s*(\S*).*/\1/' < server-linux-deps.txt | sort | uniq) <<EOF
-          /lib64/ld-linux-x86-64.so.2
-          libc.so.6
-          libm.so.6
-          libpthread.so.0
-          linux-vdso.so.1
-          EOF
 
       - name: Check client-linux dependencies
         shell: bash
@@ -346,4 +335,15 @@ jobs:
           /usr/lib/libSystem.B.dylib
           EOF
           #@executable_path/../libs/libportaudio.2.dylib
+
+      - name: Check server-linux dependencies
+        shell: bash
+        run: |
+          diff - <(sed -r 's/^\s*(\S*).*/\1/' < server-linux-deps.txt | sort | uniq) <<EOF
+          /lib64/ld-linux-x86-64.so.2
+          libc.so.6
+          libm.so.6
+          libpthread.so.0
+          linux-vdso.so.1
+          EOF
 
