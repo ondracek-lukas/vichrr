@@ -81,7 +81,7 @@ jobs:
 
     - name: Build
       run: |
-        make client FLAGS-client="-l:libgtk-x11-2.0.a -l:libgdk-x11-2.0.a -l:libportaudio.a -l:librt.a -lasound -l:libjack.a `wxwidgets/mybuild/wx-config --libs` `wxwidgets/mybuild/wx-config --cxxflags`"
+        make client FLAGS-client="-Wl,-Bstatic -lgtk-x11-2.0 -lgdk-x11-2.0 -l:libportaudio.a -l:librt.a -lasound -l:libjack.a -Wl,-Bdynamic `wxwidgets/mybuild/wx-config --libs` `wxwidgets/mybuild/wx-config --cxxflags`"
         mv client client-linux
 
     - name: Binary info
@@ -173,7 +173,7 @@ jobs:
 
     - name: Build
       run: |
-        make client.exe FLAGS-client-exe="-std=c++17 -static -static-libstdc++ -lm -mthreads -Wl,-Bstatic -lpthread -lportaudio -lole32 -lwinmm -I/home/lukas/tmp/wxWidgets/build-mingw/lib/wx/include/x86_64-w64-mingw32-msw-unicode-static-3.1 -I/home/lukas/tmp/wxWidgets/include -D_FILE_OFFSET_BITS=64 -D__WXMSW__ -L/home/lukas/tmp/wxWidgets/build-mingw/lib -Wl,--subsystem,windows -mwindows wxwidgets/mybuild/lib/libwx_mswu_xrc-3.1-x86_64-w64-mingw32.a wxwidgets/mybuild/lib/libwx_mswu_qa-3.1-x86_64-w64-mingw32.a wxwidgets/mybuild/lib/libwx_baseu_net-3.1-x86_64-w64-mingw32.a wxwidgets/mybuild/lib/libwx_mswu_html-3.1-x86_64-w64-mingw32.a wxwidgets/mybuild/lib/libwx_mswu_core-3.1-x86_64-w64-mingw32.a wxwidgets/mybuild/lib/libwx_baseu_xml-3.1-x86_64-w64-mingw32.a wxwidgets/mybuild/lib/libwx_baseu-3.1-x86_64-w64-mingw32.a -lwxtiff-3.1-x86_64-w64-mingw32 -lwxjpeg-3.1-x86_64-w64-mingw32 -lwxregexu-3.1-x86_64-w64-mingw32 -lwxscintilla-3.1-x86_64-w64-mingw32 -lexpat -lpng -lssp -lz -lrpcrt4 -loleaut32 -lole32 -luuid -luxtheme -lwinspool -lwinmm -lshell32 -lshlwapi -lcomctl32 -lcomdlg32 -ladvapi32 -lversion -lws2_32 -lgdi32 -loleacc -lwinhttp -Lportaudio -Iportaudio/include"
+        make client.exe FLAGS-client-exe="-std=c++17 -static -static-libstdc++ -lm -mthreads -Wl,-Bstatic -lpthread -lportaudio -lole32 -lwinmm -Iwxwidgets/mybuild/lib/wx/include/x86_64-w64-mingw32-msw-unicode-static-3.1 -Iwxwidgets/include -D_FILE_OFFSET_BITS=64 -D__WXMSW__ -Lwxwidgets/mybuild/lib -Wl,--subsystem,windows -mwindows wxwidgets/mybuild/lib/libwx_mswu_xrc-3.1-x86_64-w64-mingw32.a wxwidgets/mybuild/lib/libwx_mswu_qa-3.1-x86_64-w64-mingw32.a wxwidgets/mybuild/lib/libwx_baseu_net-3.1-x86_64-w64-mingw32.a wxwidgets/mybuild/lib/libwx_mswu_html-3.1-x86_64-w64-mingw32.a wxwidgets/mybuild/lib/libwx_mswu_core-3.1-x86_64-w64-mingw32.a wxwidgets/mybuild/lib/libwx_baseu_xml-3.1-x86_64-w64-mingw32.a wxwidgets/mybuild/lib/libwx_baseu-3.1-x86_64-w64-mingw32.a -lwxtiff-3.1-x86_64-w64-mingw32 -lwxjpeg-3.1-x86_64-w64-mingw32 -lwxregexu-3.1-x86_64-w64-mingw32 -lwxscintilla-3.1-x86_64-w64-mingw32 -lexpat -lpng -lssp -lz -lrpcrt4 -loleaut32 -lole32 -luuid -luxtheme -lwinspool -lwinmm -lshell32 -lshlwapi -lcomctl32 -lcomdlg32 -ladvapi32 -lversion -lws2_32 -lgdi32 -loleacc -lwinhttp -Lportaudio -Iportaudio/include"
         mv client.exe client-win.exe
 
     - name: Binary info
