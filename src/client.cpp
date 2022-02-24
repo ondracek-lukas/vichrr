@@ -18,6 +18,7 @@ public:
 	bool OnInit()
 	{
 		langInit(wxLocale::GetLanguageCanonicalName(wxLocale::GetSystemLanguage()));
+		wxSizerFlags::DisableConsistencyChecks();
 		wxBoxSizer* sizer = new wxBoxSizer(wxVERTICAL);
 		frame = new wxFrame((wxFrame *)NULL, -1,  wxT("GUI"), wxDefaultPosition, wxSize(800,600));
 		
