@@ -62,10 +62,10 @@ jobs:
     - name: Checkout the repository
       uses: actions/checkout@v2
 
-    - name: Install portaudio
+    - name: Install portaudio and gtk2.0
       run: |
         sudo apt-get update
-        sudo apt-get install libportaudio2 portaudio19-dev #libwxgtk3.0-gtk3-dev
+        sudo apt-get install libportaudio2 portaudio19-dev gtk2.0 #libwxgtk3.0-gtk3-dev
 
     - name: Compile wxWidgets
       run: |
@@ -147,7 +147,7 @@ jobs:
         git submodule update --init
         mkdir mybuild
         cd mybuild
-        ./configure --host=x86_64-w64-mingw32 --disable-shared --with-msw
+        ../configure --host=x86_64-w64-mingw32 --disable-shared --with-msw
         make -j8
         cd ../..
 
@@ -218,14 +218,27 @@ jobs:
     - name: Checkout the repository
       uses: actions/checkout@v2
 
-    - name: Install portaudio and wxWidgets
+    - name: Install portaudio
       run: |
         brew update
-        brew install portaudio wxwidgets
+        brew install portaudio
+
+    - name: Compile wxWidgets
+      run: |
+        git clone 'https://github.com/wxwidgets/wxwidgets'
+        cd wxwidgets
+        git checkout 'd1e59441a5d5f2a205cc335f79d24eabdf649c9b'  # just for reproducibility
+        git submodule update --init
+        mkdir mybuild
+        cd mybuild
+        ../configure --disable-shared --with-osx
+        make -j8
+        cd ../..
+
 
     - name: Build
       run: |
-        make client FLAGS-client="-std=c++17 -framework CoreAudio -framework AudioToolbox -framework AudioUnit -framework CoreServices -framework CoreFoundation /usr/local/Cellar/portaudio/*/lib/libportaudio.a `wx-config --libs` `wx-config --cxxflags`"
+        make client FLAGS-client="-std=c++17 -framework CoreAudio -framework AudioToolbox -framework AudioUnit -framework CoreServices -framework CoreFoundation /usr/local/Cellar/portaudio/*/lib/libportaudio.a `wxwidgets/mybuild/wx-config --libs --cxxflags`"
         mv client client-mac
 
     - name: Binary info
