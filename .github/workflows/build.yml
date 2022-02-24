@@ -120,8 +120,10 @@ jobs:
     - name: Spawn binary
       run: |
         Xvfb :99 &
+        sleep 1
         chmod +x client-linux
         DISPLAY=:99 timeout --preserve-status -sINT 2 ./client-linux --version || (( $? == 2 ))
+        kill $!
 
   build-client-win:
 
