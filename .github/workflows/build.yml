@@ -65,7 +65,7 @@ jobs:
     - name: Install portaudio and gtk2.0
       run: |
         sudo apt-get update
-        sudo apt-get install libportaudio2 portaudio19-dev gtk2.0 #libwxgtk3.0-gtk3-dev
+        sudo apt-get install libportaudio2 portaudio19-dev gtk2.0 gtk2.0-dev #libwxgtk3.0-gtk3-dev
 
     - name: Compile wxWidgets
       run: |
@@ -81,7 +81,7 @@ jobs:
 
     - name: Build
       run: |
-        make client FLAGS-client="-l:libportaudio.a -l:librt.a -lasound -l:libjack.a `wxwidgets/mybuild/wx-config --libs` `wxwidgets/mybuild/wx-config --cxxflags`"
+        make client FLAGS-client="-l:libgtk-x11-2.0.a -l:libgdk-x11-2.0.a -l:libportaudio.a -l:librt.a -lasound -l:libjack.a `wxwidgets/mybuild/wx-config --libs` `wxwidgets/mybuild/wx-config --cxxflags`"
         mv client client-linux
 
     - name: Binary info
@@ -173,7 +173,7 @@ jobs:
 
     - name: Build
       run: |
-        make client.exe FLAGS-client-exe="-std=c++17 -lm -mthreads -Wl,-Bstatic -lpthread -lportaudio -Wl,-Bdynamic -lole32 -lwinmm -Lportaudio/lib/.libs -Iportaudio/include `wxwidgets/mybuild/wx-config --libs` `wxwidgets/mybuild/wx-config --cxxflags`"
+        make client.exe FLAGS-client-exe="-std=c++17 -static -static-libstdc++ -lm -mthreads -Wl,-Bstatic -lpthread -lportaudio -lole32 -lwinmm -I/home/lukas/tmp/wxWidgets/build-mingw/lib/wx/include/x86_64-w64-mingw32-msw-unicode-static-3.1 -I/home/lukas/tmp/wxWidgets/include -D_FILE_OFFSET_BITS=64 -D__WXMSW__ -L/home/lukas/tmp/wxWidgets/build-mingw/lib -Wl,--subsystem,windows -mwindows wxwidgets/mybuild/lib/libwx_mswu_xrc-3.1-x86_64-w64-mingw32.a wxwidgets/mybuild/lib/libwx_mswu_qa-3.1-x86_64-w64-mingw32.a wxwidgets/mybuild/lib/libwx_baseu_net-3.1-x86_64-w64-mingw32.a wxwidgets/mybuild/lib/libwx_mswu_html-3.1-x86_64-w64-mingw32.a wxwidgets/mybuild/lib/libwx_mswu_core-3.1-x86_64-w64-mingw32.a wxwidgets/mybuild/lib/libwx_baseu_xml-3.1-x86_64-w64-mingw32.a wxwidgets/mybuild/lib/libwx_baseu-3.1-x86_64-w64-mingw32.a -lwxtiff-3.1-x86_64-w64-mingw32 -lwxjpeg-3.1-x86_64-w64-mingw32 -lwxregexu-3.1-x86_64-w64-mingw32 -lwxscintilla-3.1-x86_64-w64-mingw32 -lexpat -lpng -lssp -lz -lrpcrt4 -loleaut32 -lole32 -luuid -luxtheme -lwinspool -lwinmm -lshell32 -lshlwapi -lcomctl32 -lcomdlg32 -ladvapi32 -lversion -lws2_32 -lgdi32 -loleacc -lwinhttp -Lportaudio -Iportaudio/include"
         mv client.exe client-win.exe
 
     - name: Binary info
