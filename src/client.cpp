@@ -5,6 +5,7 @@
 #include <wx/html/htmlwin.h>
 #include "../tmp/lang.gen.hpp"
 #include <cstdio>
+#include <iostream>
 
 #include "guiPreConnectPane.hpp"
 
@@ -17,6 +18,10 @@ public:
 	
 	bool OnInit()
 	{
+		if ((wxApp::argc > 1) && (wxString(wxApp::argv[1]) == "--version")) {
+			std::cout << "version number XXX" << std::endl; // XXX
+			exit(0);
+		}
 		langInit(wxLocale::GetLanguageCanonicalName(wxLocale::GetSystemLanguage()));
 		wxSizerFlags::DisableConsistencyChecks();
 		wxBoxSizer* sizer = new wxBoxSizer(wxVERTICAL);
