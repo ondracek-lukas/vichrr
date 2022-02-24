@@ -107,10 +107,10 @@ jobs:
     needs: build-client-linux
 
     steps:
-    - name: Install xpra (for running without gui) and gtk2.0
+    - name: Install xvfb (for running without gui) and gtk2.0
       run: |
         sudo apt-get update
-        sudo apt-get install gtk2.0 xpra
+        sudo apt-get install gtk2.0 xvfb
 
     - name: Download binaries
       uses: actions/download-artifact@v2
@@ -119,10 +119,9 @@ jobs:
 
     - name: Spawn binary
       run: |
+        Xvfb :99 &
         chmod +x client-linux
-        xpra start :7
-        DISPLAY=:7 timeout --preserve-status -sINT 2 ./client-linux --version || (( $? == 2 ))
-        xpra stop :7
+        DISPLAY=:99 timeout --preserve-status -sINT 2 ./client-linux --version || (( $? == 2 ))
 
   build-client-win:
 
@@ -180,7 +179,9 @@ jobs:
 
     - name: Build
       run: |
-        make client.exe FLAGS-client-exe="-std=c++17 -static-libstdc++ -static-libgcc -Wl,-Bstatic -lstdc++ -mthreads -lpthread -lportaudio -lole32 -lwinmm -Iwxwidgets/mybuild/lib/wx/include/x86_64-w64-mingw32-msw-unicode-static-3.1 -Iwxwidgets/include -D_FILE_OFFSET_BITS=64 -D__WXMSW__ -Lwxwidgets/mybuild/lib -Wl,--subsystem,windows -mwindows wxwidgets/mybuild/lib/libwx_mswu_xrc-3.1-x86_64-w64-mingw32.a wxwidgets/mybuild/lib/libwx_mswu_qa-3.1-x86_64-w64-mingw32.a wxwidgets/mybuild/lib/libwx_baseu_net-3.1-x86_64-w64-mingw32.a wxwidgets/mybuild/lib/libwx_mswu_html-3.1-x86_64-w64-mingw32.a wxwidgets/mybuild/lib/libwx_mswu_core-3.1-x86_64-w64-mingw32.a wxwidgets/mybuild/lib/libwx_baseu_xml-3.1-x86_64-w64-mingw32.a wxwidgets/mybuild/lib/libwx_baseu-3.1-x86_64-w64-mingw32.a -lwxtiff-3.1-x86_64-w64-mingw32 -lwxjpeg-3.1-x86_64-w64-mingw32 -lwxregexu-3.1-x86_64-w64-mingw32 -lwxscintilla-3.1-x86_64-w64-mingw32 -lexpat -lpng -lssp -lz -lrpcrt4 -loleaut32 -lole32 -luuid -luxtheme -lwinspool -lwinmm -lshell32 -lshlwapi -lcomctl32 -lcomdlg32 -ladvapi32 -lversion -lws2_32 -lgdi32 -loleacc -lwinhttp -Lportaudio -Iportaudio/include"
+        # make client.exe FLAGS-client-exe="-std=c++17 -static-libstdc++ -static-libgcc -Wl,-Bstatic -lstdc++ -mthreads -lpthread -lportaudio -lole32 -lwinmm -Iwxwidgets/mybuild/lib/wx/include/x86_64-w64-mingw32-msw-unicode-static-3.1 -Iwxwidgets/include -D_FILE_OFFSET_BITS=64 -D__WXMSW__ -Lwxwidgets/mybuild/lib -Wl,--subsystem,windows -mwindows wxwidgets/mybuild/lib/libwx_mswu_xrc-3.1-x86_64-w64-mingw32.a wxwidgets/mybuild/lib/libwx_mswu_qa-3.1-x86_64-w64-mingw32.a wxwidgets/mybuild/lib/libwx_baseu_net-3.1-x86_64-w64-mingw32.a wxwidgets/mybuild/lib/libwx_mswu_html-3.1-x86_64-w64-mingw32.a wxwidgets/mybuild/lib/libwx_mswu_core-3.1-x86_64-w64-mingw32.a wxwidgets/mybuild/lib/libwx_baseu_xml-3.1-x86_64-w64-mingw32.a wxwidgets/mybuild/lib/libwx_baseu-3.1-x86_64-w64-mingw32.a -lwxtiff-3.1-x86_64-w64-mingw32 -lwxjpeg-3.1-x86_64-w64-mingw32 -lwxregexu-3.1-x86_64-w64-mingw32 -lwxscintilla-3.1-x86_64-w64-mingw32 -lexpat -lpng -lssp -lz -lrpcrt4 -loleaut32 -lole32 -luuid -luxtheme -lwinspool -lwinmm -lshell32 -lshlwapi -lcomctl32 -lcomdlg32 -ladvapi32 -lversion -lws2_32 -lgdi32 -loleacc -lwinhttp -Lportaudio -Iportaudio/include"
+        make client.exe FLAGS-client-exe="-std=c++17 -static-libstdc++ -static-libgcc -lm -mthreads -Wl,-Bstatic -lpthread -lportaudio -Wl,-Bdynamic -lole32 -lwinmm -Lportaudio/lib/.libs -Iportaudio/include `wxwidgets/mybuild/wx-config --libs` `wxwidgets/mybuild/wx-config --cxxflags`"
+
         mv client.exe client-win.exe
 
     - name: Binary info
