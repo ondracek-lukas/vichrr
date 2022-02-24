@@ -81,7 +81,7 @@ jobs:
 
     - name: Build
       run: |
-        wx-config --list
+        wxwidgets/mybuild/wx-config --libs --cxxflags
         make client FLAGS-client="-l:libportaudio.a -l:librt.a -lasound -l:libjack.a `wxwidgets/mybuild/wx-config --libs --cxxflags`"
         mv client client-linux
 
@@ -174,7 +174,8 @@ jobs:
 
     - name: Build
       run: |
-        make client.exe FLAGS-client-exe="-std=c++17 -lm -mthreads -Wl,-Bstatic -lpthread -lportaudio -Wl,-Bdynamic -lole32 -lwinmm -Lportaudio/lib/.libs -Iportaudio/include -I/usr/x86_64-w64-mingw32/include/wx-3.1/ `wxwidgets/mybuild/wx-config --libs --cxxflags`"
+        wxwidgets/mybuild/wx-config --libs --cxxflags
+        make client.exe FLAGS-client-exe="-std=c++17 -lm -mthreads -Wl,-Bstatic -lpthread -lportaudio -Wl,-Bdynamic -lole32 -lwinmm -Lportaudio/lib/.libs -Iportaudio/include `wxwidgets/mybuild/wx-config --libs --cxxflags`"
         mv client.exe client-win.exe
 
     - name: Binary info
@@ -235,10 +236,10 @@ jobs:
         make -j8
         cd ../..
 
-
     - name: Build
       run: |
-        make client FLAGS-client="-std=c++17 -framework CoreAudio -framework AudioToolbox -framework AudioUnit -framework CoreServices -framework CoreFoundation /usr/local/Cellar/portaudio/*/lib/libportaudio.a `wxwidgets/mybuild/wx-config --libs --cxxflags`"
+        wxwidgets/mybuild/wx-config --libs --cxxflags
+        make client FLAGS-client="-std=c++17 -framework CoreAudio -framework AudioToolbox -framework AudioUnit -framework CoreServices -framework CoreFoundation /usr/local/Cellar/portaudio/*/lib/libportaudio.a `echo $(wxwidgets/mybuild/wx-config --libs --cxxflags)`"
         mv client client-mac
 
     - name: Binary info
