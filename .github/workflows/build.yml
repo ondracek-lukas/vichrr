@@ -81,7 +81,7 @@ jobs:
 
     - name: Build
       run: |
-        make client FLAGS-client="-Wl,-Bstatic -lgtk-x11-2.0 -lgdk-x11-2.0 -l:libportaudio.a -l:librt.a -lasound -l:libjack.a -Wl,-Bdynamic `wxwidgets/mybuild/wx-config --libs` `wxwidgets/mybuild/wx-config --cxxflags`"
+        make client FLAGS-client="-l:libportaudio.a -l:librt.a -lasound -l:libjack.a `wxwidgets/mybuild/wx-config --libs` `wxwidgets/mybuild/wx-config --cxxflags`"
         mv client client-linux
 
     - name: Binary info
@@ -107,15 +107,20 @@ jobs:
     needs: build-client-linux
 
     steps:
-      - name: Download binaries
-        uses: actions/download-artifact@v2
-        with:
-          name: binaries
+    - name: Install gtk2.0
+      run: |
+        sudo apt-get update
+        sudo apt-get install gtk2.0
 
-      - name: Spawn binary
-        run: |
-          chmod +x client-linux
-          timeout --preserve-status -sINT 2 ./client-linux --version || (( $? == 2 ))
+    - name: Download binaries
+      uses: actions/download-artifact@v2
+      with:
+        name: binaries
+
+    - name: Spawn binary
+      run: |
+        chmod +x client-linux
+        timeout --preserve-status -sINT 2 ./client-linux --version || (( $? == 2 ))
 
   build-client-win:
 
