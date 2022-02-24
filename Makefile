@@ -3,7 +3,6 @@
 FLAGS-client=-std=c++17 `wx-config --libs` `wx-config --cxxflags` -lportaudio
 FLAGS-client-exe=-std=c++17 -lm -mthreads -lws2_32 -lportaudio
 FLAGS-server=-O3 -march=native
-CFLAGS=-std=c++17
 
 override LDFLAGS += -lm -pthread
 
@@ -18,7 +17,7 @@ client: src/client.cpp src/*.hpp tmp/lang.gen.hpp
 
 
 client.exe: src/client.cpp src/*.hpp tmp/lang.gen.hpp
-	x86_64-w64-mingw32-gcc $< -o $@ $(FLAGS-client-exe)
+	x86_64-w64-mingw32-g++ $< -o $@ $(FLAGS-client-exe)
 
 
 tmp/lang.gen.hpp: src/langGen.pl lang/*

@@ -115,7 +115,7 @@ jobs:
       - name: Spawn binary
         run: |
           chmod +x client-linux
-          timeout --preserve-status -sINT 2 ./client-linux || (( $? == 2 ))
+          timeout --preserve-status -sINT 2 ./client-linux --version || (( $? == 2 ))
 
   build-client-win:
 
@@ -206,7 +206,7 @@ jobs:
       - name: Spawn binary
         shell: bash
         run: |
-          timeout --preserve-status -k3 2 ./client-win.exe || (( $? == 2 ))
+          timeout --preserve-status -k3 2 ./client-win.exe --version || (( $? == 2 ))
 
   build-client-mac:
 
@@ -316,7 +316,7 @@ jobs:
         shell: bash
         run: |
           #/Volumes/client-mac/client-mac.app/Contents/MacOS/client-mac </dev/null & sleep 3; kill -INT $! || true; wait $!
-          /Volumes/client-mac/client-mac </dev/null & sleep 3; kill -INT $! || true; wait $!
+          /Volumes/client-mac/client-mac --version </dev/null & sleep 3; kill -INT $! || true; wait $!
           #gtimeout --preserve-status -sINT 2 ./client-mac || (( $? == 2 ))
 
   check-dependencies:
