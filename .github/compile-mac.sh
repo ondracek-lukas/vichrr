@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# This script will install Virtual Choir Rehearsal Room on macOS.
+# This script will compile and install ViChRR (Virtual Choir Rehearsal Room) on macOS.
 # Written by Lukáš Ondráček.
 
 set -e
@@ -11,18 +11,18 @@ set -e
 # Install PortAudio library
 brew install portaudio
 
-# Clone git repository of virtual-choir-rehearsal room to home directory
+# Clone git repository of ViChRR to home directory
 cd
-git clone 'https://github.com/ondracek-lukas/virtual-choir-rehearsal-room'
+git clone 'https://github.com/ondracek-lukas/vichrr'
 
 # Compile it
-cd virtual-choir-rehearsal-room
+cd vichrr
 make client
 
 # Create a script for updating
 cat > update.sh << EOF
 #!/bin/bash
-cd virtual-choir-rehearsal-room
+cd vichrr
 make clean
 git pull
 make client
@@ -31,12 +31,12 @@ chmod +x update.sh
 
 # Create link on desktop
 cd ../Desktop
-ln -s ../virtual-choir-rehearsal-room/client "Virtual Choir Rehearsal Room"
+ln -s ../vichrr/client "ViChRR"
 cd ..
 
 # Inform user about probable success
 echo
 echo "Virtual Choir Rehearsal Room seems to be installed successfully on desktop."
 echo "For future updating use the following command:"
-echo "  virtual-choir-rehearsal-room/update.sh"
+echo "  vichrr/update.sh"
 echo

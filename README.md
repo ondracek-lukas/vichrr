@@ -1,4 +1,4 @@
-**Virtual Choir Rehearsal Room**
+**ViChRR** (Virtual Choir Rehearsal Room)
 is a terminal application for low-latency multiparty audio calls optimized for singing.
 A client application is available for Windows, Linux, and MacOS.
 Linux server with good connectivity is needed as a mixing point.
@@ -80,7 +80,6 @@ otherwise it may not work properly due to battery saving features.
 **Linux client:**
 
 * Download latest version from _[releases]_ section or see compilation process below.
-* Install PortAudio Library (i.e. libportaudio, portaudio, or similar).
 * Run the application.
 
 Latency of PulseAudio sound system is ~20 ms,
@@ -90,14 +89,16 @@ or using JACK sound system.
 
 **MacOS client:**
 
-Currently no precompiled binaries are available,
-see compilation process below or use the following simplified inctructions:
+* Download latest version from _[releases]_ section or see compilation process below.
+* Run the application.
 
-* Download install-mac.sh script from _[releases]_ section to your desktop.
+If you have M1 chip, you need to compile the application yourself:
+
+* Download vichrr-compile-mac.sh script from _[releases]_ section to your desktop.
 * Open terminal and write there the following two lines:
     ```
-    chmod +x Desktop/install-mac.sh
-    Desktop/install-mac.sh
+    chmod +x Desktop/vichrr-compile-mac.sh
+    Desktop/vichrr-compile-mac.sh
     ```
 * Enter password for installing applications when prompted.
 * A link to the application should have been created on desktop.
@@ -110,7 +111,7 @@ The script installs:
 
 For later updates write the following line to terminal:
 
-    virtual-choir-rehearsal-room/update.sh
+    vichrr/update.sh
 
 
 **Linux server:**
@@ -191,8 +192,8 @@ Dependencies:
 
 Getting sources:
 
-    git clone 'https://github.com/ondracek-lukas/virtual-choir-rehearsal-room.git'
-    cd virtual-choir-rehearsal-room
+    git clone 'https://github.com/ondracek-lukas/vichrr.git'
+    cd vichrr
 
 Compiling native client:
 
@@ -217,7 +218,9 @@ Updating to newer version:
 See also
 --------
 
-* [Virtual Choir Rehearsal Room][1] on github.
+* [ViChRR on github][1],
+* [Webpage of ViChRR][2].
 
-[1]: https://github.com/ondracek-lukas/virtual-choir-rehearsal-room
-[releases]: https://github.com/ondracek-lukas/virtual-choir-rehearsal-room/releases
+[1]: https://github.com/ondracek-lukas/vichrr
+[2]: https://l.ondrac.cz/vichrr
+[releases]: https://github.com/ondracek-lukas/vichrr/releases
