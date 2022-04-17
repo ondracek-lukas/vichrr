@@ -594,7 +594,10 @@ void *statusWorker(void *nothing) {
 				}
 			}
 			char delayStr[6];
-			snprintf(delayStr, 6, "%4lu", (uint64_t)leading.delay * MONO_BLOCK_SIZE * 1000 / SAMPLE_RATE);
+			{
+				uint32_t delayMs = (uint64_t)leading.delay * MONO_BLOCK_SIZE * 1000 / SAMPLE_RATE;
+				snprintf(delayStr, 6, "%4u", delayMs > 9999 ? 9999 : delayMs);
+			}
 			LN {
 				TXT("Leading track:  ");
 				if (leadingTrackName) {

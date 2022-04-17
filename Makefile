@@ -1,7 +1,7 @@
 # Virtual Choir Rehearsal Room  Copyright (C) 2020  Lukas Ondracek <ondracek.lukas@gmail.com>, use under GNU GPLv3
 
 LDFLAGS-client=-lportaudio
-CFLAGS-server=-O3 -march=native
+CFLAGS-server=-O3
 override LDFLAGS += -lm -pthread
 override CFLAGS += -std=gnu99
 
