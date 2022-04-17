@@ -111,8 +111,9 @@ sample_t *bufferReadNext(struct audioBuffer *buf) {
 
 	// check whether to skip some data (to lower delay)
 	int skip = 0;
-	if (buf->lastJumpTime + BUFFER_DES_JUMP_PERIOD <= buf->readTime) {
+	if (buf->lastJumpTime + BUFFER_SKIP_PERIOD <= buf->readTime) {
 		skip = writeLastPos - readPos - 1;
+		if (skip > BUFFER_SKIP_PERIOD) skip = BUFFER_SKIP_PERIOD;
 		int seenBlocks = 0;
 		for (bindex_t i = writeLastPos; (skip > 0) && (i + BUFFER_DES_JUMP_PERIOD > readPos) && (i > 0); i--) {
 			if (buf->blockTime[i % BUFFER_BLOCKS]) {

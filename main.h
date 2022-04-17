@@ -18,7 +18,9 @@
 #define MONO_BLOCK_SIZE         128  // 2.667 ms
 #define BUFFER_BLOCKS          4096  // 10.92 s, ~1 MB mono, ~2 MB stereo
 #define STEREO_BLOCK_SIZE (2 * MONO_BLOCK_SIZE)
-#define BUFFER_DES_JUMP_PERIOD 1500  // blocks, 5s; desired minimal period between jumps in stream
+#define BUFFER_DES_JUMP_PERIOD 1500  // blocks, 4s; desired minimal period between jumps in stream
+
+#define BUFFER_SKIP_PERIOD       20  // blocks, 53 ms
 
 
 #define STAT_HALFLIFE_MSEC      100
